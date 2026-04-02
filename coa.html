@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>دليل الحسابات - النظام المحاسبي</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
+        :root { --primary-color: #2563eb; }
+        body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
+        .bg-primary { background-color: var(--primary-color); }
+        .text-primary { color: var(--primary-color); }
+        @media print { .no-print { display: none !important; } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        // استيراد المحرك المركزي
+        import { db, fs, auth, authActions, applySystemSettings } from './config.js';
+        window.db = db; window.fs = fs; window.auth = auth; window.authActions = authActions;
+        window.applySystemSettings = applySystemSettings;
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const LucideIcon = ({ name, size = 18, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} width={size} height={size} className={className}></i>;
+        };
+
+        const ChartOfAccounts = () => {
+            const [accounts, setAccounts] = useState([]);
+            const [journalEntries, setJournalEntries] = useState([]);
+            const [formData, setFormData] = useState({ id: '', code: '', name: '', type: 'asset', parentId: '' });
+            const [isEditing, setIsEditing] = useState(false);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                window.applySystemSettings(); // تطبيق الخط والألوان عند التحميل
+                
+                // جلب الحسابات
+                const unsubAccounts = window.fs.onSnapshot(window.fs.collection(window.db, "accounts"), (snapshot) => {
+                    const accs = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+                    setAccounts(accs);
+                    setLoading(false);
+                });
+
+                // جلب القيود لحساب الأرصدة
+                const unsubJournals = window.fs.onSnapshot(window.fs.collection(window.db, "journalEntries"), (snapshot) => {
+                    const entries = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+                    setJournalEntries(entries);
+                });
+
+                return () => { unsubAccounts(); unsubJournals(); };
+            }, []);
+
+            const getAccountBalance = (accountId) => {
+                let balance = 0;
+                const account = accounts.find(a => a.id === accountId);
+                if (!account) return 0;
+                journalEntries.forEach(entry => {
+                    entry.lines.forEach(line => {
+                        if (line.accountId === accountId) {
+                            balance += (['asset', 'expense'].includes(account.type)) 
+                                ? (Number(line.debit) - Number(line.credit)) 
+                                : (Number(line.credit) - Number(line.debit));
+                        }
+                    });
+                });
+                return balance;
+            };
+
+            const generateNextCode = (parentAccount) => {
+                if (!parentAccount) {
+                    const rootAccounts = accounts.filter(a => !a.parentId);
+                    if (rootAccounts.length === 0) return '1';
+                    const maxCode = Math.max(...rootAccounts.map(a => parseInt(a.code)));
+                    return (maxCode + 1).toString();
+                }
+                const siblings = accounts.filter(a => a.parentId === parentAccount.id);
+                if (siblings.length > 0) {
+                    const maxCode = Math.max(...siblings.map(a => parseInt(a.code)));
+                    return (maxCode + 1).toString();
+                } else {
+                    return parentAccount.code.length === 1 ? `${parentAccount.code}1` : `${parentAccount.code}01`;
+                }
+            };
+
+            const handleSubmit = async () => {
+                if (!formData.code || !formData.name) return;
+                let level = 1;
+                if (formData.parentId) {
+                    const parent = accounts.find(a => a.id === formData.parentId);
+                    if (parent) level = parent.level + 1;
+                }
+                const accountData = { code: formData.code, name: formData.name, type: formData.type, parentId: formData.parentId || null, level };
+                try {
+                    await window.fs.setDoc(window.fs.doc(window.db, "accounts", formData.code), accountData);
+                    setFormData({ id: '', code: generateNextCode(null), name: '', type: 'asset', parentId: '' });
+                    setIsEditing(false);
+                } catch(e) { alert("خطأ في الحفظ"); }
+            };
+
+            const handleDelete = async (id) => {
+                if (window.confirm('حذف الحساب؟')) {
+                    const isUsed = journalEntries.some(e => e.lines.some(l => l.accountId === id));
+                    if (isUsed) return alert('الحساب مستخدم في قيود!');
+                    await window.fs.deleteDoc(window.fs.doc(window.db, "accounts", id));
+                }
+            };
+
+            if (loading) return <div className="p-10 text-center">جاري تحميل الدليل...</div>;
+
+            return (
+                <div className="p-6 max-w-6xl mx-auto space-y-6">
+                    <header className="flex justify-between items-center no-print">
+                        <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                            <LucideIcon name="list-tree" className="text-primary" size={28} /> دليل الحسابات
+                        </h1>
+                        <button onClick={() => window.location.href = 'index.html'} className="bg-slate-200 p-2 rounded-lg hover:bg-slate-300">
+                            <LucideIcon name="home" />
+                        </button>
+                    </header>
+
+                    {/* نموذج الإضافة */}
+                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm no-print">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                            <div>
+                                <label className="text-xs text-slate-500 block mb-1">الحساب الرئيسي</label>
+                                <select className="w-full border p-2 rounded-lg text-sm" value={formData.parentId} 
+                                    onChange={(e) => {
+                                        const parent = accounts.find(a => a.id === e.target.value);
+                                        setFormData({...formData, parentId: e.target.value, code: generateNextCode(parent), type: parent ? parent.type : 'asset'});
+                                    }}>
+                                    <option value="">-- حساب مستوى 1 --</option>
+                                    {accounts.filter(a => a.level < 3).map(p => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-500 block mb-1">اسم الحساب</label>
+                                <input className="w-full border p-2 rounded-lg text-sm" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="مثال: البنك الأهلي" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-500 block mb-1">الكود</label>
+                                <input className="w-full border p-2 rounded-lg text-sm bg-slate-50" value={formData.code} readOnly />
+                            </div>
+                            <button onClick={handleSubmit} className="bg-primary text-white p-2 rounded-lg font-bold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity">
+                                <LucideIcon name={isEditing ? "save" : "plus"} /> {isEditing ? "حفظ التعديل" : "إضافة حساب"}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* الجدول */}
+                    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+                        <table className="w-full text-right border-collapse">
+                            <thead className="bg-slate-50 text-slate-600 text-sm">
+                                <tr>
+                                    <th className="p-4 border-b">الكود</th>
+                                    <th className="p-4 border-b">اسم الحساب</th>
+                                    <th className="p-4 border-b">النوع</th>
+                                    <th className="p-4 border-b">الرصيد</th>
+                                    <th className="p-4 border-b text-center no-print">إجراءات</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {[...accounts].sort((a,b) => a.code.localeCompare(b.code)).map(acc => (
+                                    <tr key={acc.id} className="hover:bg-slate-50 transition-colors">
+                                        <td className="p-4 font-mono text-slate-500">{acc.code}</td>
+                                        <td className="p-4">
+                                            <div style={{ paddingRight: `${(acc.level - 1) * 20}px` }}>
+                                                {acc.level > 1 && <span className="text-slate-300 ml-2">↳</span>}
+                                                <span className={acc.level === 1 ? "font-bold text-slate-800" : "text-slate-600"}>{acc.name}</span>
+                                            </div>
+                                        </td>
+                                        <td className="p-4">
+                                            <span className={`text-[10px] px-2 py-1 rounded-full ${acc.type === 'asset' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>
+                                                {acc.type === 'asset' ? 'أصل' : acc.type === 'liability' ? 'خصم' : acc.type === 'equity' ? 'ملكية' : acc.type === 'revenue' ? 'إيراد' : 'مصروف'}
+                                            </span>
+                                        </td>
+                                        <td className="p-4 font-bold text-slate-700">{getAccountBalance(acc.id).toLocaleString()}</td>
+                                        <td className="p-4 text-center no-print">
+                                            <div className="flex justify-center gap-2">
+                                                <button onClick={() => {setFormData(acc); setIsEditing(true);}} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><LucideIcon name="edit" size={16} /></button>
+                                                <button onClick={() => handleDelete(acc.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><LucideIcon name="trash-2" size={16} /></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<ChartOfAccounts />);
+    </script>
+</body>
+</html>

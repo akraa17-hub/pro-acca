@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إدارة المخزون - النظام المحاسبي</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
+        :root { --primary-color: #2563eb; }
+        body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
+        .bg-primary { background-color: var(--primary-color); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import { db, fs, applySystemSettings } from './config.js';
+        window.db = db; window.fs = fs;
+        window.applySystemSettings = applySystemSettings;
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const LucideIcon = ({ name, size = 18, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} width={size} height={size} className={className}></i>;
+        };
+
+        const InventoryPage = () => {
+            const [products, setProducts] = useState([]);
+            const [showModal, setShowModal] = useState(false);
+            const [newProduct, setNewProduct] = useState({ name: '', sku: '', category: '', currentStock: 0, lastPurchasePrice: 0 });
+
+            useEffect(() => {
+                window.applySystemSettings();
+                const unsub = window.fs.onSnapshot(window.fs.collection(window.db, "products"), (snapshot) => {
+                    setProducts(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+                });
+                return () => unsub();
+            }, []);
+
+            const handleAddProduct = async () => {
+                if (!newProduct.name || !newProduct.sku) return;
+                try {
+                    await window.fs.addDoc(window.fs.collection(window.db, "products"), newProduct);
+                    setShowModal(false);
+                    setNewProduct({ name: '', sku: '', category: '', currentStock: 0, lastPurchasePrice: 0 });
+                } catch (e) { alert("خطأ في الإضافة"); }
+            };
+
+            return (
+                <div className="p-6 max-w-6xl mx-auto space-y-8">
+                    <header className="flex justify-between items-center">
+                        <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                            <LucideIcon name="box" className="text-indigo-600" size={28} /> مراقبة المخزون والأصناف
+                        </h1>
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowModal(true)} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl flex items-center gap-2 shadow-lg shadow-indigo-100 font-bold hover:bg-indigo-700 transition-all">
+                                <LucideIcon name="plus" /> إضافة صنف جديد
+                            </button>
+                            <button onClick={() => window.location.href = 'index.html'} className="bg-slate-200 p-2.5 rounded-xl hover:bg-slate-300 transition-colors"><LucideIcon name="home" /></button>
+                        </div>
+                    </header>
+
+                    {/* إحصائيات سريعة */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                            <p className="text-slate-400 text-sm">إجمالي عدد الأصناف</p>
+                            <h3 className="text-2xl font-bold">{products.length} صنف</h3>
+                        </div>
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                            <p className="text-slate-400 text-sm">قيمة المخزون (بالتكلفة)</p>
+                            <h3 className="text-2xl font-bold text-emerald-600">
+                                {products.reduce((acc, p) => acc + (p.currentStock * p.lastPurchasePrice), 0).toLocaleString()}
+                            </h3>
+                        </div>
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                            <p className="text-slate-400 text-sm">أصناف منخفضة الكمية</p>
+                            <h3 className="text-2xl font-bold text-red-500">{products.filter(p => p.currentStock < 5).length} أصناف</h3>
+                        </div>
+                    </div>
+
+                    {/* جدول المخزون */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                        <table className="w-full text-right text-sm">
+                            <thead className="bg-slate-50 text-slate-500 font-bold">
+                                <tr>
+                                    <th className="p-4">كود الصنف (SKU)</th>
+                                    <th className="p-4">اسم الصنف</th>
+                                    <th className="p-4">التصنيف</th>
+                                    <th className="p-4 text-center">الكمية المتاحة</th>
+                                    <th className="p-4 text-center">تكلفة الوحدة</th>
+                                    <th className="p-4 text-left">إجمالي القيمة</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y">
+                                {products.map(p => (
+                                    <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                                        <td className="p-4 font-mono text-slate-400">{p.sku}</td>
+                                        <td className="p-4 font-bold text-slate-800">{p.name}</td>
+                                        <td className="p-4 text-slate-500">{p.category || 'عام'}</td>
+                                        <td className="p-4 text-center">
+                                            <span className={`px-3 py-1 rounded-full font-bold ${p.currentStock < 5 ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-700'}`}>
+                                                {p.currentStock}
+                                            </span>
+                                        </td>
+                                        <td className="p-4 text-center font-mono">{p.lastPurchasePrice.toLocaleString()}</td>
+                                        <td className="p-4 text-left font-bold font-mono">{(p.currentStock * p.lastPurchasePrice).toLocaleString()}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {/* Modal إضافة صنف */}
+                    {showModal && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+                            <div className="bg-white p-8 rounded-3xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
+                                <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
+                                    <LucideIcon name="package-plus" className="text-indigo-600" /> تعريف صنف جديد
+                                </h2>
+                                <div className="space-y-4">
+                                    <input placeholder="اسم المنتج (مثال: لابتوب ديل)" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} />
+                                    <input placeholder="كود الصنف (SKU)" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono" value={newProduct.sku} onChange={e => setNewProduct({...newProduct, sku: e.target.value})} />
+                                    <input placeholder="التصنيف" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} />
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <input type="number" placeholder="الكمية الافتتاحية" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={newProduct.currentStock} onChange={e => setNewProduct({...newProduct, currentStock: Number(e.target.value)})} />
+                                        <input type="number" placeholder="سعر التكلفة" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={newProduct.lastPurchasePrice} onChange={e => setNewProduct({...newProduct, lastPurchasePrice: Number(e.target.value)})} />
+                                    </div>
+                                    <div className="flex gap-3 mt-6">
+                                        <button onClick={handleAddProduct} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700">تعريف الصنف</button>
+                                        <button onClick={() => setShowModal(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200">إلغاء</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<InventoryPage />);
+    </script>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إدارة المبيعات والعملاء - النظام المحاسبي</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
+        :root { --primary-color: #2563eb; }
+        body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
+        .bg-primary { background-color: var(--primary-color); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import { db, fs, applySystemSettings } from './config.js';
+        window.db = db; window.fs = fs;
+        window.applySystemSettings = applySystemSettings;
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const LucideIcon = ({ name, size = 18, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} width={size} height={size} className={className}></i>;
+        };
+
+        const SalesPage = () => {
+            const [customers, setCustomers] = useState([]);
+            const [invoices, setInvoices] = useState([]);
+            const [showCustomerModal, setShowCustomerModal] = useState(false);
+            const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', email: '' });
+            const [newInvoice, setNewInvoice] = useState({ customerId: '', amount: 0, date: new Date().toISOString().split('T')[0], note: '' });
+
+            useEffect(() => {
+                window.applySystemSettings();
+                const unsubCustomers = window.fs.onSnapshot(window.fs.collection(window.db, "customers"), (snapshot) => {
+                    setCustomers(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+                });
+                const unsubInvoices = window.fs.onSnapshot(window.fs.collection(window.db, "sales_invoices"), (snapshot) => {
+                    setInvoices(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+                });
+                return () => { unsubCustomers(); unsubInvoices(); };
+            }, []);
+
+            const handleAddCustomer = async () => {
+                if (!newCustomer.name) return;
+                await window.fs.addDoc(window.fs.collection(window.db, "customers"), newCustomer);
+                setShowCustomerModal(false);
+                setNewCustomer({ name: '', phone: '', email: '' });
+            };
+
+            const handleSaveInvoice = async () => {
+                if (!newInvoice.customerId || newInvoice.amount <= 0) return;
+                
+                try {
+                    // 1. حفظ الفاتورة في المبيعات
+                    const invoiceDoc = await window.fs.addDoc(window.fs.collection(window.db, "sales_invoices"), newInvoice);
+                    
+                    // 2. توليد القيد المحاسبي تلقائياً (من ح/ العملاء إلى ح/ المبيعات)
+                    const autoEntry = {
+                        date: newInvoice.date,
+                        description: `فاتورة مبيعات رقم ${invoiceDoc.id.substring(0,5)} - عميل: ${customers.find(c => c.id === newInvoice.customerId)?.name}`,
+                        lines: [
+                            { accountId: '1103', debit: newInvoice.amount, credit: 0, note: 'مديونية عميل' }, // حساب العملاء (أصل)
+                            { accountId: '4101', debit: 0, credit: newInvoice.amount, note: 'إيراد مبيعات' }  // حساب المبيعات (إيراد)
+                        ]
+                    };
+                    await window.fs.setDoc(window.fs.doc(window.db, "journalEntries", Date.now().toString()), autoEntry);
+                    
+                    alert("تم حفظ الفاتورة وتوليد القيد المحاسبي بنجاح!");
+                    setNewInvoice({ customerId: '', amount: 0, date: new Date().toISOString().split('T')[0], note: '' });
+                } catch (e) { alert("خطأ في الحفظ"); }
+            };
+
+            return (
+                <div className="p-6 max-w-6xl mx-auto space-y-8">
+                    <header className="flex justify-between items-center">
+                        <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                            <LucideIcon name="shopping-cart" className="text-blue-600" size={28} /> إدارة المبيعات والعملاء
+                        </h1>
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowCustomerModal(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 shadow-sm font-bold">
+                                <LucideIcon name="user-plus" /> إضافة عميل
+                            </button>
+                            <button onClick={() => window.location.href = 'index.html'} className="bg-slate-200 p-2.5 rounded-xl"><LucideIcon name="home" /></button>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                        {/* نموذج الفاتورة */}
+                        <div className="md:col-span-1 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                            <h2 className="font-bold border-b pb-2">إنشاء فاتورة بيع</h2>
+                            <div>
+                                <label className="text-xs text-slate-400">العميل</label>
+                                <select className="w-full border p-2 rounded-lg" value={newInvoice.customerId} onChange={e => setNewInvoice({...newInvoice, customerId: e.target.value})}>
+                                    <option value="">-- اختر عميل --</option>
+                                    {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400">المبلغ</label>
+                                <input type="number" className="w-full border p-2 rounded-lg" value={newInvoice.amount} onChange={e => setNewInvoice({...newInvoice, amount: Number(e.target.value)})} />
+                            </div>
+                            <div>
+                                <label className="text-xs text-slate-400">التاريخ</label>
+                                <input type="date" className="w-full border p-2 rounded-lg" value={newInvoice.date} onChange={e => setNewInvoice({...newInvoice, date: e.target.value})} />
+                            </div>
+                            <button onClick={handleSaveInvoice} className="w-full bg-primary text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-100">حفظ الفاتورة</button>
+                        </div>
+
+                        {/* قائمة الفواتير الأخيرة */}
+                        <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                            <table className="w-full text-right text-sm">
+                                <thead className="bg-slate-50 text-slate-500 font-bold">
+                                    <tr><th className="p-4">التاريخ</th><th className="p-4">العميل</th><th className="p-4">المبلغ</th><th className="p-4">الحالة</th></tr>
+                                </thead>
+                                <tbody className="divide-y">
+                                    {invoices.map(inv => (
+                                        <tr key={inv.id} className="hover:bg-slate-50">
+                                            <td className="p-4">{inv.date}</td>
+                                            <td className="p-4 font-bold">{customers.find(c => c.id === inv.customerId)?.name}</td>
+                                            <td className="p-4 font-mono text-blue-600 font-bold">{Number(inv.amount).toLocaleString()}</td>
+                                            <td className="p-4"><span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-[10px]">قيدت آلياً</span></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* Modal إضافة عميل */}
+                    {showCustomerModal && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white p-8 rounded-3xl w-full max-w-md shadow-2xl animate-fade-in">
+                                <h2 className="text-xl font-bold mb-6">بيانات عميل جديد</h2>
+                                <div className="space-y-4">
+                                    <input placeholder="اسم العميل" className="w-full border p-3 rounded-xl" value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} />
+                                    <input placeholder="رقم الجوال" className="w-full border p-3 rounded-xl" value={newCustomer.phone} onChange={e => setNewCustomer({...newCustomer, phone: e.target.value})} />
+                                    <div className="flex gap-3 mt-6">
+                                        <button onClick={handleAddCustomer} className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold">حفظ</button>
+                                        <button onClick={() => setShowCustomerModal(false)} className="flex-1 bg-slate-100 py-3 rounded-xl">إلغاء</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<SalesPage />);
+    </script>
+</body>
+</html>

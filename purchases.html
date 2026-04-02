@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إدارة المشتريات والموردين - النظام المحاسبي</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
+        :root { --primary-color: #2563eb; }
+        body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
+        .bg-primary { background-color: var(--primary-color); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import { db, fs, applySystemSettings } from './config.js';
+        window.db = db; window.fs = fs;
+        window.applySystemSettings = applySystemSettings;
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const LucideIcon = ({ name, size = 18, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} width={size} height={size} className={className}></i>;
+        };
+
+        const PurchasesPage = () => {
+            const [vendors, setVendors] = useState([]);
+            const [purchases, setPurchases] = useState([]);
+            const [showVendorModal, setShowVendorModal] = useState(false);
+            const [newVendor, setNewVendor] = useState({ name: '', phone: '' });
+            const [newPurchase, setNewPurchase] = useState({ vendorId: '', amount: 0, date: new Date().toISOString().split('T')[0] });
+
+            useEffect(() => {
+                window.applySystemSettings();
+                window.fs.onSnapshot(window.fs.collection(window.db, "vendors"), (snapshot) => {
+                    setVendors(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+                });
+                window.fs.onSnapshot(window.fs.collection(window.db, "purchase_invoices"), (snapshot) => {
+                    setPurchases(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+                });
+            }, []);
+
+            const handleSavePurchase = async () => {
+                if (!newPurchase.vendorId || newPurchase.amount <= 0) return;
+                try {
+                    const purDoc = await window.fs.addDoc(window.fs.collection(window.db, "purchase_invoices"), newPurchase);
+                    
+                    // توليد قيد آلي: من ح/ المشتريات إلى ح/ الموردين
+                    const autoEntry = {
+                        date: newPurchase.date,
+                        description: `فاتورة مشتريات رقم ${purDoc.id.substring(0,5)} - مورد: ${vendors.find(v => v.id === newPurchase.vendorId)?.name}`,
+                        lines: [
+                            { accountId: '5101', debit: newPurchase.amount, credit: 0, note: 'إثبات مصروف/مشتريات' }, 
+                            { accountId: '2101', debit: 0, credit: newPurchase.amount, note: 'مديونية لمورد' }
+                        ]
+                    };
+                    await window.fs.setDoc(window.fs.doc(window.db, "journalEntries", Date.now().toString()), autoEntry);
+                    alert("تم حفظ المشتريات بنجاح!");
+                } catch (e) { alert("خطأ"); }
+            };
+
+            return (
+                <div className="p-6 max-w-6xl mx-auto space-y-8">
+                    <header className="flex justify-between items-center">
+                        <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                            <LucideIcon name="package" className="text-orange-600" size={28} /> إدارة المشتريات والموردين
+                        </h1>
+                        <div className="flex gap-3">
+                            <button onClick={() => setShowVendorModal(true)} className="bg-orange-600 text-white px-4 py-2 rounded-xl font-bold">إضافة مورد</button>
+                            <button onClick={() => window.location.href = 'index.html'} className="bg-slate-200 p-2.5 rounded-xl"><LucideIcon name="home" /></button>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
+                            <h2 className="font-bold border-b pb-2 text-orange-600">فاتورة شراء جديدة</h2>
+                            <select className="w-full border p-2 rounded-lg" value={newPurchase.vendorId} onChange={e => setNewPurchase({...newPurchase, vendorId: e.target.value})}>
+                                <option value="">-- اختر مورد --</option>
+                                {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                            </select>
+                            <input type="number" className="w-full border p-2 rounded-lg" placeholder="المبلغ" onChange={e => setNewPurchase({...newPurchase, amount: Number(e.target.value)})} />
+                            <button onClick={handleSavePurchase} className="w-full bg-orange-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-orange-100">حفظ المشتريات</button>
+                        </div>
+                        
+                        <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                            <table className="w-full text-right text-sm">
+                                <thead className="bg-orange-50 text-orange-700 font-bold">
+                                    <tr><th className="p-4">التاريخ</th><th className="p-4">المورد</th><th className="p-4">المبلغ</th><th className="p-4">الحالة</th></tr>
+                                </thead>
+                                <tbody>
+                                    {purchases.map(p => (
+                                        <tr key={p.id} className="hover:bg-orange-50">
+                                            <td className="p-4">{p.date}</td>
+                                            <td className="p-4 font-bold">{vendors.find(v => v.id === p.vendorId)?.name}</td>
+                                            <td className="p-4 font-mono font-bold">{Number(p.amount).toLocaleString()}</td>
+                                            <td className="p-4"><span className="bg-orange-100 text-orange-700 px-2 py-1 rounded-full text-[10px]">قيدت آلياً</span></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {showVendorModal && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white p-8 rounded-3xl w-full max-w-md">
+                                <h2 className="text-xl font-bold mb-6">إضافة مورد جديد</h2>
+                                <input placeholder="اسم المورد" className="w-full border p-3 rounded-xl mb-4" value={newVendor.name} onChange={e => setNewVendor({...newVendor, name: e.target.value})} />
+                                <button onClick={async () => { await window.fs.addDoc(window.fs.collection(window.db, "vendors"), newVendor); setShowVendorModal(false); }} className="w-full bg-orange-600 text-white py-3 rounded-xl font-bold">حفظ المورد</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<PurchasesPage />);
+    </script>
+</body>
+</html>

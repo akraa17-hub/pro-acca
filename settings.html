@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إعدادات النظام - المحاسب الذكي</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
+        :root { --primary-color: #2563eb; }
+        body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
+        .bg-primary { background-color: var(--primary-color); }
+        .text-primary { color: var(--primary-color); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const LucideIcon = ({ name, size = 20, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} width={size} height={size} className={className}></i>;
+        };
+
+        const SettingsPage = () => {
+            const [settings, setSettings] = useState({
+                primaryColor: '#2563eb',
+                fontFamily: "'Readex Pro', sans-serif",
+                companyName: 'المحاسب القانوني زياد العتيبي',
+                currency: 'SAR'
+            });
+
+            useEffect(() => {
+                const saved = localStorage.getItem('system_settings');
+                if (saved) setSettings(JSON.parse(saved));
+            }, []);
+
+            const handleSave = () => {
+                localStorage.setItem('system_settings', JSON.stringify(settings));
+                document.documentElement.style.setProperty('--primary-color', settings.primaryColor);
+                alert('تم حفظ الإعدادات بنجاح! سيتم تطبيق التغييرات على كافة الصفحات.');
+            };
+
+            return (
+                <div className="min-h-screen p-8">
+                    <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                        <div className="bg-slate-900 p-6 text-white flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                <LucideIcon name="settings" size={24} />
+                                <h1 className="text-xl font-bold">إعدادات النظام الاحترافية</h1>
+                            </div>
+                            <button onClick={() => window.location.href = 'index.html'} className="text-slate-400 hover:text-white transition-colors">
+                                <LucideIcon name="x" />
+                            </button>
+                        </div>
+
+                        <div className="p-8 space-y-8">
+                            {/* قسم الهوية البصرية */}
+                            <section>
+                                <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-2">
+                                    <LucideIcon name="palette" className="text-blue-500" /> الهوية البصرية والتصميم
+                                </h2>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-2">اللون الأساسي للنظام</label>
+                                        <div className="flex gap-4 items-center">
+                                            <input 
+                                                type="color" 
+                                                value={settings.primaryColor}
+                                                onChange={(e) => setSettings({...settings, primaryColor: e.target.value})}
+                                                className="w-12 h-12 rounded cursor-pointer border-none"
+                                            />
+                                            <span className="text-sm font-mono text-slate-500">{settings.primaryColor}</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-2">نوع الخط المستخدم</label>
+                                        <select 
+                                            className="w-full border p-2.5 rounded-lg bg-slate-50"
+                                            value={settings.fontFamily}
+                                            onChange={(e) => setSettings({...settings, fontFamily: e.target.value})}
+                                        >
+                                            <option value="'Readex Pro', sans-serif">Readex Pro (الافتراضي)</option>
+                                            <option value="'Tajawal', sans-serif">Tajawal</option>
+                                            <option value="'Cairo', sans-serif">Cairo</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* قسم بيانات المنشأة */}
+                            <section>
+                                <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-2">
+                                    <LucideIcon name="building" className="text-blue-500" /> بيانات المنشأة والتقارير
+                                </h2>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-2">اسم المنشأة (يظهر في التقارير)</label>
+                                        <input 
+                                            type="text" 
+                                            value={settings.companyName}
+                                            onChange={(e) => setSettings({...settings, companyName: e.target.value})}
+                                            className="w-full border p-2.5 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-2">العملة الافتراضية</label>
+                                        <select 
+                                            className="w-full border p-2.5 rounded-lg bg-slate-50"
+                                            value={settings.currency}
+                                            onChange={(e) => setSettings({...settings, currency: e.target.value})}
+                                        >
+                                            <option value="SAR">ريال سعودي (SAR)</option>
+                                            <option value="USD">دولار أمريكي (USD)</option>
+                                            <option value="EGP">جنيه مصري (EGP)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <div className="pt-6 border-t flex justify-end">
+                                <button 
+                                    onClick={handleSave}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-blue-200 transition-all active:scale-95"
+                                >
+                                    <LucideIcon name="save" /> حفظ الإعدادات وتطبيقها
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<SettingsPage />);
+    </script>
+</body>
+</html>

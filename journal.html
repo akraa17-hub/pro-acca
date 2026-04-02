@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>قيود اليومية - النظام المحاسبي</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
+        :root { --primary-color: #2563eb; }
+        body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
+        .bg-primary { background-color: var(--primary-color); }
+        .text-primary { color: var(--primary-color); }
+        @media print { .no-print { display: none !important; } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        // استيراد المحرك المركزي المشترك
+        import { db, fs, auth, authActions, applySystemSettings } from './config.js';
+        window.db = db; window.fs = fs; window.auth = auth; window.authActions = authActions;
+        window.applySystemSettings = applySystemSettings;
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const LucideIcon = ({ name, size = 18, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} width={size} height={size} className={className}></i>;
+        };
+
+        const JournalEntriesPage = () => {
+            const [viewMode, setViewMode] = useState('list');
+            const [accounts, setAccounts] = useState([]);
+            const [journalEntries, setJournalEntries] = useState([]);
+            const [editingId, setEditingId] = useState(null);
+            const [newEntry, setNewEntry] = useState({
+                date: new Date().toISOString().split('T')[0],
+                description: '',
+                lines: [{ accountId: '', debit: 0, credit: 0, note: '' }, { accountId: '', debit: 0, credit: 0, note: '' }]
+            });
+
+            useEffect(() => {
+                window.applySystemSettings();
+                
+                const unsubAccounts = window.fs.onSnapshot(window.fs.collection(window.db, "accounts"), (snapshot) => {
+                    setAccounts(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+                });
+
+                const unsubJournals = window.fs.onSnapshot(window.fs.collection(window.db, "journalEntries"), (snapshot) => {
+                    const entries = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+                    setJournalEntries(entries.sort((a,b) => b.id - a.id));
+                });
+
+                return () => { unsubAccounts(); unsubJournals(); };
+            }, []);
+
+            const totalDebit = newEntry.lines.reduce((sum, line) => sum + Number(line.debit), 0);
+            const totalCredit = newEntry.lines.reduce((sum, line) => sum + Number(line.credit), 0);
+            const isBalanced = totalDebit === totalCredit && totalDebit > 0;
+
+            const handleLineChange = (index, field, value) => {
+                const updatedLines = [...newEntry.lines];
+                updatedLines[index][field] = value;
+                if (field === 'debit' && value > 0) updatedLines[index].credit = 0;
+                if (field === 'credit' && value > 0) updatedLines[index].debit = 0;
+                setNewEntry({...newEntry, lines: updatedLines});
+            };
+
+            const saveEntry = async () => {
+                if (!isBalanced || !newEntry.description) return;
+                const entryData = { ...newEntry, userEmail: window.auth.currentUser?.email || 'Guest' };
+                try {
+                    if (editingId) {
+                        await window.fs.updateDoc(window.fs.doc(window.db, "journalEntries", editingId), entryData);
+                    } else {
+                        await window.fs.setDoc(window.fs.doc(window.db, "journalEntries", Date.now().toString()), entryData);
+                    }
+                    setViewMode('list');
+                    setEditingId(null);
+                    setNewEntry({ date: new Date().toISOString().split('T')[0], description: '', lines: [{ accountId: '', debit: 0, credit: 0, note: '' }, { accountId: '', debit: 0, credit: 0, note: '' }] });
+                } catch(e) { alert("خطأ في حفظ القيد"); }
+            };
+
+            const deleteEntry = async (id) => {
+                if (window.confirm('هل تريد حذف هذا القيد نهائياً؟')) {
+                    await window.fs.deleteDoc(window.fs.doc(window.db, "journalEntries", id));
+                }
+            };
+
+            if (viewMode === 'create') {
+                return (
+                    <div className="p-6 max-w-5xl mx-auto space-y-6">
+                        <div className="flex items-center gap-4">
+                            <button onClick={() => setViewMode('list')} className="p-2 hover:bg-slate-200 rounded-full transition-colors"><LucideIcon name="arrow-right" /></button>
+                            <h1 className="text-2xl font-bold text-slate-800">{editingId ? 'تعديل قيد' : 'إنشاء قيد يومية جديد'}</h1>
+                        </div>
+                        
+                        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm space-y-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-600 mb-2">تاريخ القيد</label>
+                                    <input type="date" value={newEntry.date} onChange={e => setNewEntry({...newEntry, date: e.target.value})} className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-600 mb-2">البيان / الوصف</label>
+                                    <input type="text" value={newEntry.description} onChange={e => setNewEntry({...newEntry, description: e.target.value})} placeholder="شرح القيد بالتفصيل..." className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+                                </div>
+                            </div>
+
+                            <table className="w-full text-right">
+                                <thead className="text-xs text-slate-400 border-b">
+                                    <tr>
+                                        <th className="pb-2">الحساب</th>
+                                        <th className="pb-2 w-32">مدين</th>
+                                        <th className="pb-2 w-32">دائن</th>
+                                        <th className="pb-2">ملاحظات</th>
+                                        <th className="pb-2 w-10"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {newEntry.lines.map((line, idx) => (
+                                        <tr key={idx} className="border-b last:border-0">
+                                            <td className="py-3">
+                                                <select value={line.accountId} onChange={e => handleLineChange(idx, 'accountId', e.target.value)} className="w-full p-2 border rounded-lg text-sm bg-slate-50">
+                                                    <option value="">-- اختر الحساب --</option>
+                                                    {accounts.filter(a => a.level === 3).map(acc => <option key={acc.id} value={acc.id}>{acc.code} - {acc.name}</option>)}
+                                                </select>
+                                            </td>
+                                            <td className="p-2"><input type="number" value={line.debit} onChange={e => handleLineChange(idx, 'debit', e.target.value)} className="w-full p-2 border rounded-lg text-center" /></td>
+                                            <td className="p-2"><input type="number" value={line.credit} onChange={e => handleLineChange(idx, 'credit', e.target.value)} className="w-full p-2 border rounded-lg text-center" /></td>
+                                            <td className="p-2"><input type="text" value={line.note} onChange={e => handleLineChange(idx, 'note', e.target.value)} className="w-full p-2 border rounded-lg" placeholder="اختياري" /></td>
+                                            <td className="p-2"><button onClick={() => setNewEntry({...newEntry, lines: newEntry.lines.filter((_, i) => i !== idx)})} className="text-red-400 hover:text-red-600"><LucideIcon name="trash-2" size={16}/></button></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+
+                            <button onClick={() => setNewEntry({...newEntry, lines: [...newEntry.lines, { accountId: '', debit: 0, credit: 0, note: '' }]})} className="text-primary text-sm font-bold flex items-center gap-1 hover:underline">
+                                <LucideIcon name="plus" size={16} /> إضافة سطر جديد
+                            </button>
+
+                            <div className="flex justify-between items-center pt-6 border-t">
+                                <div className="flex gap-6 text-sm">
+                                    <span className={totalDebit === totalCredit ? "text-emerald-600 font-bold" : "text-red-500 font-bold"}>المدين: {totalDebit.toLocaleString()}</span>
+                                    <span className={totalDebit === totalCredit ? "text-emerald-600 font-bold" : "text-red-500 font-bold"}>الدائن: {totalCredit.toLocaleString()}</span>
+                                </div>
+                                <button onClick={saveEntry} disabled={!isBalanced} className={`px-10 py-3 rounded-xl text-white font-bold transition-all ${isBalanced ? 'bg-primary shadow-lg shadow-blue-200 active:scale-95' : 'bg-slate-300 cursor-not-allowed'}`}>
+                                    حفظ القيد المحاسبي
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="p-6 max-w-6xl mx-auto space-y-6">
+                    <header className="flex justify-between items-center no-print">
+                        <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                            <LucideIcon name="book-open" className="text-primary" size={28} /> قيود اليومية العامة
+                        </h1>
+                        <div className="flex gap-3">
+                            <button onClick={() => window.location.href = 'index.html'} className="bg-slate-200 p-2.5 rounded-xl hover:bg-slate-300 transition-colors"><LucideIcon name="home" /></button>
+                            <button onClick={() => setViewMode('create')} className="bg-primary text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-md hover:opacity-90">
+                                <LucideIcon name="plus-circle" /> قيد جديد
+                            </button>
+                        </div>
+                    </header>
+
+                    <div className="space-y-4">
+                        {journalEntries.map(entry => (
+                            <div key={entry.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                <div className="bg-slate-50 p-4 border-b flex justify-between items-center">
+                                    <div className="flex items-center gap-4">
+                                        <span className="font-bold text-slate-700">{entry.date}</span>
+                                        <span className="text-slate-500 text-sm">{entry.description}</span>
+                                    </div>
+                                    <div className="flex gap-2 no-print">
+                                        <button onClick={() => {setEditingId(entry.id); setNewEntry(entry); setViewMode('create');}} className="p-2 text-blue-500 hover:bg-blue-50 rounded-lg"><LucideIcon name="edit" size={18}/></button>
+                                        <button onClick={() => deleteEntry(entry.id)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><LucideIcon name="trash-2" size={18}/></button>
+                                    </div>
+                                </div>
+                                <table className="w-full text-right text-sm">
+                                    <tbody className="divide-y divide-slate-50">
+                                        {entry.lines.map((line, lidx) => (
+                                            <tr key={lidx}>
+                                                <td className="p-3 text-slate-700">{accounts.find(a => a.id === line.accountId)?.name || 'حساب غير معروف'}</td>
+                                                <td className="p-3 text-emerald-600 font-mono">{line.debit > 0 ? Number(line.debit).toLocaleString() : ''}</td>
+                                                <td className="p-3 text-red-600 font-mono">{line.credit > 0 ? Number(line.credit).toLocaleString() : ''}</td>
+                                                <td className="p-3 text-slate-400 text-xs italic">{line.note}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<JournalEntriesPage />);
+    </script>
+</body>
+</html>

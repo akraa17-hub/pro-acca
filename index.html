@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة التحكم - النظام المحاسبي الذكي</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
+        :root { --primary-color: #2563eb; }
+        body { 
+            font-family: 'Readex Pro', sans-serif; 
+            background-color: #f1f5f9; 
+            background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        .card-hover:hover { transform: translateY(-5px); transition: all 0.3s ease; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import { db, fs, auth, applySystemSettings } from './config.js';
+        window.db = db; window.fs = fs; window.auth = auth;
+        window.applySystemSettings = applySystemSettings;
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const LucideIcon = ({ name, size = 24, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} width={size} height={size} className={className}></i>;
+        };
+
+        const DashboardCard = ({ title, icon, color, link, description }) => (
+            <a href={link} className="card-hover bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center text-center group">
+                <div className={`${color} p-4 rounded-2xl text-white mb-4 shadow-lg group-hover:scale-110 transition-transform`}>
+                    <LucideIcon name={icon} size={32} />
+                </div>
+                <h3 className="font-bold text-slate-800 text-lg mb-2">{title}</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">{description}</p>
+            </a>
+        );
+
+        const MainDashboard = () => {
+            const [companyName, setCompanyName] = useState('نظام المحاسب الذكي');
+
+            useEffect(() => {
+                const settings = window.applySystemSettings();
+                if (settings && settings.companyName) setCompanyName(settings.companyName);
+            }, []);
+
+            return (
+                <div className="min-h-screen p-6 md:p-12">
+                    <header className="max-w-6xl mx-auto mb-12 flex flex-col md:flex-row justify-between items-center gap-6">
+                        <div>
+                            <h1 className="text-3xl font-black text-slate-900">{companyName}</h1>
+                            <p className="text-slate-500 mt-2 flex items-center gap-2">
+                                <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                                نظام المحاسبة السحابي المتكامل جاهز للعمل
+                            </p>
+                        </div>
+                        <div className="flex gap-4">
+                            <button onClick={() => window.location.href = 'settings.html'} className="bg-white p-3 rounded-2xl border border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm transition-all">
+                                <LucideIcon name="settings" />
+                            </button>
+                            <button className="bg-red-50 p-3 rounded-2xl border border-red-100 text-red-500 hover:bg-red-100 shadow-sm transition-all">
+                                <LucideIcon name="log-out" />
+                            </button>
+                        </div>
+                    </header>
+
+                    <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                        {/* المحاسبة العامة */}
+                        <DashboardCard 
+                            title="دليل الحسابات" 
+                            icon="list-tree" 
+                            color="bg-blue-600" 
+                            link="coa.html" 
+                            description="إدارة هيكل الشجرة المحاسبية وتصنيف الحسابات"
+                        />
+                        <DashboardCard 
+                            title="قيود اليومية" 
+                            icon="edit-3" 
+                            color="bg-indigo-600" 
+                            link="journal.html" 
+                            description="تسجيل الحركات المالية اليومية والمزدوجة"
+                        />
+                        <DashboardCard 
+                            title="دفتر الأستاذ" 
+                            icon="book" 
+                            color="bg-purple-600" 
+                            link="ledger.html" 
+                            description="متابعة كشوف الحسابات التفصيلية والأرصدة"
+                        />
+                        <DashboardCard 
+                            title="التقارير المالية" 
+                            icon="pie-chart" 
+                            color="bg-emerald-600" 
+                            link="reports.html" 
+                            description="ميزان المراجعة، قائمة الدخل، والمركز المالي"
+                        />
+
+                        {/* العمليات التشغيلية */}
+                        <DashboardCard 
+                            title="المبيعات والعملاء" 
+                            icon="shopping-cart" 
+                            color="bg-sky-600" 
+                            link="sales.html" 
+                            description="إصدار الفواتير، سندات القبض، وبيانات العملاء"
+                        />
+                        <DashboardCard 
+                            title="المشتريات والموردين" 
+                            icon="package" 
+                            color="bg-orange-600" 
+                            link="purchases.html" 
+                            description="إدارة المشتريات، الموردين، وسندات الصرف"
+                        />
+                        <DashboardCard 
+                            title="المخزون" 
+                            icon="box" 
+                            color="bg-rose-600" 
+                            link="inventory.html" 
+                            description="مراقبة الأصناف، الكميات، وحساب تكلفة المخزون"
+                        />
+                        <DashboardCard 
+                            title="إعدادات النظام" 
+                            icon="sliders" 
+                            color="bg-slate-700" 
+                            link="settings.html" 
+                            description="تخصيص الألوان، الخطوط، وبيانات المنشأة"
+                        />
+                    </div>
+
+                    <footer className="max-w-6xl mx-auto mt-16 pt-8 border-t border-slate-200 text-center text-slate-400 text-sm">
+                        <p>&copy; 2026 {companyName} - جميع الحقوق محفوظة</p>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<MainDashboard />);
+    </script>
+</body>
+</html>
