@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>إدارة المخزون - النظام المحاسبي</title>
+    <title>إدارة المخزون المطور - النظام المحاسبي</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -11,9 +11,8 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
-        :root { --primary-color: #2563eb; }
-        body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
-        .bg-primary { background-color: var(--primary-color); }
+        body { font-family: 'Readex Pro', sans-serif; background-color: #f1f5f9; }
+        .drawer-transition { transition: transform 0.3s ease-in-out; }
     </style>
 </head>
 <body>
@@ -35,113 +34,116 @@
 
         const InventoryPage = () => {
             const [products, setProducts] = useState([]);
-            const [showModal, setShowModal] = useState(false);
-            const [newProduct, setNewProduct] = useState({ name: '', sku: '', category: '', currentStock: 0, lastPurchasePrice: 0 });
+            const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+            const [editingProduct, setEditingProduct] = useState(null);
+            const [formData, setFormData] = useState({ name: '', category: '', currentStock: 0, lastPurchasePrice: 0 });
 
             useEffect(() => {
                 window.applySystemSettings();
-                const unsub = window.fs.onSnapshot(window.fs.collection(window.db, "products"), (snapshot) => {
+                const unsubscribe = window.fs.onSnapshot(window.fs.collection(window.db, "products"), (snapshot) => {
                     setProducts(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
                 });
-                return () => unsub();
+                return () => unsubscribe();
             }, []);
 
-            const handleAddProduct = async () => {
-                if (!newProduct.name || !newProduct.sku) return;
+            const openDrawer = (product = null) => {
+                if (product) {
+                    setEditingProduct(product);
+                    setFormData({ ...product });
+                } else {
+                    setEditingProduct(null);
+                    setFormData({ name: '', category: '', currentStock: 0, lastPurchasePrice: 0 });
+                }
+                setIsDrawerOpen(true);
+            };
+
+            const handleSave = async () => {
+                if (!formData.name) return alert("يرجى إدخال اسم الصنف");
                 try {
-                    await window.fs.addDoc(window.fs.collection(window.db, "products"), newProduct);
-                    setShowModal(false);
-                    setNewProduct({ name: '', sku: '', category: '', currentStock: 0, lastPurchasePrice: 0 });
-                } catch (e) { alert("خطأ في الإضافة"); }
+                    if (editingProduct) {
+                        await window.fs.updateDoc(window.fs.doc(window.db, "products", editingProduct.id), formData);
+                    } else {
+                        await window.fs.addDoc(window.fs.collection(window.db, "products"), formData);
+                    }
+                    setIsDrawerOpen(false);
+                } catch (e) { alert("خطأ في الحفظ"); }
+            };
+
+            const handleDelete = async (id) => {
+                if (confirm("هل أنت متأكد من حذف هذا الصنف نهائياً؟")) {
+                    await window.fs.deleteDoc(window.fs.doc(window.db, "products", id));
+                }
             };
 
             return (
-                <div className="p-6 max-w-6xl mx-auto space-y-8">
-                    <header className="flex justify-between items-center">
-                        <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                            <LucideIcon name="box" className="text-indigo-600" size={28} /> مراقبة المخزون والأصناف
-                        </h1>
-                        <div className="flex gap-3">
-                            <button onClick={() => setShowModal(true)} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl flex items-center gap-2 shadow-lg shadow-indigo-100 font-bold hover:bg-indigo-700 transition-all">
-                                <LucideIcon name="plus" /> إضافة صنف جديد
-                            </button>
-                            <button onClick={() => window.location.href = 'index.html'} className="bg-slate-200 p-2.5 rounded-xl hover:bg-slate-300 transition-colors"><LucideIcon name="home" /></button>
-                        </div>
-                    </header>
-
-                    {/* إحصائيات سريعة */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                            <p className="text-slate-400 text-sm">إجمالي عدد الأصناف</p>
-                            <h3 className="text-2xl font-bold">{products.length} صنف</h3>
-                        </div>
-                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                            <p className="text-slate-400 text-sm">قيمة المخزون (بالتكلفة)</p>
-                            <h3 className="text-2xl font-bold text-emerald-600">
-                                {products.reduce((acc, p) => acc + (p.currentStock * p.lastPurchasePrice), 0).toLocaleString()}
-                            </h3>
-                        </div>
-                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                            <p className="text-slate-400 text-sm">أصناف منخفضة الكمية</p>
-                            <h3 className="text-2xl font-bold text-red-500">{products.filter(p => p.currentStock < 5).length} أصناف</h3>
-                        </div>
-                    </div>
-
-                    {/* جدول المخزون */}
-                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                        <table className="w-full text-right text-sm">
-                            <thead className="bg-slate-50 text-slate-500 font-bold">
-                                <tr>
-                                    <th className="p-4">كود الصنف (SKU)</th>
-                                    <th className="p-4">اسم الصنف</th>
-                                    <th className="p-4">التصنيف</th>
-                                    <th className="p-4 text-center">الكمية المتاحة</th>
-                                    <th className="p-4 text-center">تكلفة الوحدة</th>
-                                    <th className="p-4 text-left">إجمالي القيمة</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y">
-                                {products.map(p => (
-                                    <tr key={p.id} className="hover:bg-slate-50 transition-colors">
-                                        <td className="p-4 font-mono text-slate-400">{p.sku}</td>
-                                        <td className="p-4 font-bold text-slate-800">{p.name}</td>
-                                        <td className="p-4 text-slate-500">{p.category || 'عام'}</td>
-                                        <td className="p-4 text-center">
-                                            <span className={`px-3 py-1 rounded-full font-bold ${p.currentStock < 5 ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-700'}`}>
-                                                {p.currentStock}
-                                            </span>
-                                        </td>
-                                        <td className="p-4 text-center font-mono">{p.lastPurchasePrice.toLocaleString()}</td>
-                                        <td className="p-4 text-left font-bold font-mono">{(p.currentStock * p.lastPurchasePrice).toLocaleString()}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    {/* Modal إضافة صنف */}
-                    {showModal && (
-                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-                            <div className="bg-white p-8 rounded-3xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
-                                <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
-                                    <LucideIcon name="package-plus" className="text-indigo-600" /> تعريف صنف جديد
-                                </h2>
-                                <div className="space-y-4">
-                                    <input placeholder="اسم المنتج (مثال: لابتوب ديل)" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} />
-                                    <input placeholder="كود الصنف (SKU)" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono" value={newProduct.sku} onChange={e => setNewProduct({...newProduct, sku: e.target.value})} />
-                                    <input placeholder="التصنيف" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} />
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <input type="number" placeholder="الكمية الافتتاحية" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={newProduct.currentStock} onChange={e => setNewProduct({...newProduct, currentStock: Number(e.target.value)})} />
-                                        <input type="number" placeholder="سعر التكلفة" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={newProduct.lastPurchasePrice} onChange={e => setNewProduct({...newProduct, lastPurchasePrice: Number(e.target.value)})} />
-                                    </div>
-                                    <div className="flex gap-3 mt-6">
-                                        <button onClick={handleAddProduct} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700">تعريف الصنف</button>
-                                        <button onClick={() => setShowModal(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200">إلغاء</button>
-                                    </div>
-                                </div>
+                <div className="relative min-h-screen overflow-x-hidden">
+                    <div className="p-6 max-w-5xl mx-auto">
+                        <header className="flex justify-between items-center mb-8">
+                            <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+                                <LucideIcon name="package" className="text-blue-600" size={28} /> إدارة المخزون
+                            </h1>
+                            <div className="flex gap-2">
+                                <button onClick={() => openDrawer()} className="bg-blue-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 hover:bg-blue-700 shadow-lg shadow-blue-100 transition-all">
+                                    <LucideIcon name="plus" /> صنف جديد
+                                </button>
+                                <button onClick={() => window.location.href='index.html'} className="bg-white p-2 rounded-xl border border-slate-200"><LucideIcon name="home" /></button>
                             </div>
+                        </header>
+
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                            <table className="w-full text-right">
+                                <thead className="bg-slate-50 border-b">
+                                    <tr>
+                                        <th className="p-4 text-slate-500 font-bold">اسم الصنف</th>
+                                        <th className="p-4 text-slate-500 font-bold">الفئة</th>
+                                        <th className="p-4 text-center text-slate-500 font-bold">الرصيد الحالي</th>
+                                        <th className="p-4 text-left text-slate-500 font-bold">إجراءات</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {products.map(p => (
+                                        <tr key={p.id} className="hover:bg-slate-50 transition-colors group">
+                                            <td className="p-4 font-bold text-slate-700">{p.name}</td>
+                                            <td className="p-4"><span className="bg-slate-100 px-2 py-1 rounded-lg text-xs">{p.category}</span></td>
+                                            <td className="p-4 text-center font-mono font-bold text-blue-600">{p.currentStock}</td>
+                                            <td className="p-4 flex justify-end gap-2">
+                                                <button onClick={() => openDrawer(p)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"><LucideIcon name="edit-3" size={16} /></button>
+                                                <button onClick={() => handleDelete(p.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"><LucideIcon name="trash-2" size={16} /></button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
-                    )}
+                    </div>
+
+                    {/* اللوح الجانبي المنزلق (Side Drawer) */}
+                    {isDrawerOpen && <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40" onClick={() => setIsDrawerOpen(false)}></div>}
+                    <div className={`fixed top-0 left-0 h-full w-80 bg-white shadow-2xl z-50 p-6 drawer-transition transform ${isDrawerOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                        <div className="flex justify-between items-center mb-6 border-b pb-4">
+                            <h2 className="font-bold text-lg text-slate-800">{editingProduct ? 'تعديل صنف' : 'إضافة صنف جديد'}</h2>
+                            <button onClick={() => setIsDrawerOpen(false)} className="text-slate-400"><LucideIcon name="x" /></button>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-xs font-bold text-slate-400 mb-1 block uppercase">اسم المنتج</label>
+                                <input type="text" className="w-full border p-3 rounded-xl bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                    value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-400 mb-1 block uppercase">الفئة</label>
+                                <input type="text" className="w-full border p-3 rounded-xl bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                    value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-400 mb-1 block uppercase">الكمية الافتتاحية</label>
+                                <input type="number" className="w-full border p-3 rounded-xl bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                    value={formData.currentStock} onChange={e => setFormData({...formData, currentStock: Number(e.target.value)})} />
+                            </div>
+                            <button onClick={handleSave} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-blue-100 hover:bg-blue-700 mt-6 transition-all">حفظ التغييرات</button>
+                        </div>
+                    </div>
                 </div>
             );
         };
