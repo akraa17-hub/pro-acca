@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>إدارة المبيعات والعملاء - النظام المحاسبي</title>
+    <title>إدارة المبيعات المتطورة - النظام المحاسبي</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -11,9 +11,8 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
-        :root { --primary-color: #2563eb; }
         body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
-        .bg-primary { background-color: var(--primary-color); }
+        .drawer-slide { transition: transform 0.3s ease-in-out; }
     </style>
 </head>
 <body>
@@ -26,7 +25,7 @@
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
         const LucideIcon = ({ name, size = 18, className = "" }) => {
             useEffect(() => { lucide.createIcons(); }, [name]);
@@ -35,124 +34,183 @@
 
         const SalesPage = () => {
             const [customers, setCustomers] = useState([]);
-            const [invoices, setInvoices] = useState([]);
-            const [showCustomerModal, setShowCustomerModal] = useState(false);
-            const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', email: '' });
-            const [newInvoice, setNewInvoice] = useState({ customerId: '', amount: 0, date: new Date().toISOString().split('T')[0], note: '' });
+            const [products, setProducts] = useState([]);
+            const [sales, setSales] = useState([]);
+            const [loading, setLoading] = useState(false);
+            
+            const [drawerOpen, setDrawerOpen] = useState(false);
+            const [selectedSale, setSelectedSale] = useState(null);
+            const [invoice, setInvoice] = useState({ 
+                customerId: '', 
+                productId: '', 
+                quantity: 1, 
+                unitPrice: 0, 
+                date: new Date().toISOString().split('T')[0] 
+            });
 
             useEffect(() => {
                 window.applySystemSettings();
-                const unsubCustomers = window.fs.onSnapshot(window.fs.collection(window.db, "customers"), (snapshot) => {
-                    setCustomers(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-                });
-                const unsubInvoices = window.fs.onSnapshot(window.fs.collection(window.db, "sales_invoices"), (snapshot) => {
-                    setInvoices(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-                });
-                return () => { unsubCustomers(); unsubInvoices(); };
+                window.fs.onSnapshot(window.fs.collection(window.db, "customers"), s => setCustomers(s.docs.map(d => ({...d.data(), id: d.id}))));
+                window.fs.onSnapshot(window.fs.collection(window.db, "products"), s => setProducts(s.docs.map(d => ({...d.data(), id: d.id}))));
+                window.fs.onSnapshot(window.fs.collection(window.db, "sales_invoices"), s => setSales(s.docs.map(d => ({...d.data(), id: d.id}))));
             }, []);
 
-            const handleAddCustomer = async () => {
-                if (!newCustomer.name) return;
-                await window.fs.addDoc(window.fs.collection(window.db, "customers"), newCustomer);
-                setShowCustomerModal(false);
-                setNewCustomer({ name: '', phone: '', email: '' });
+            const totalAmount = useMemo(() => invoice.quantity * invoice.unitPrice, [invoice.quantity, invoice.unitPrice]);
+
+            const handleSaveSale = async () => {
+                const prod = products.find(p => p.id === invoice.productId);
+                if (!prod || prod.currentStock < invoice.quantity) {
+                    alert(`خطأ: الكمية المتوفرة (${prod?.currentStock || 0}) لا تكفي للبيع.`);
+                    return;
+                }
+
+                setLoading(true);
+                try {
+                    const cust = customers.find(c => c.id === invoice.customerId);
+                    const entryId = Date.now().toString();
+
+                    await window.fs.addDoc(window.fs.collection(window.db, "sales_invoices"), {
+                        ...invoice,
+                        totalAmount,
+                        productName: prod.name,
+                        customerName: cust.name,
+                        entryId
+                    });
+
+                    // تحديث المخزون (خصم)
+                    await window.fs.updateDoc(window.fs.doc(window.db, "products", invoice.productId), {
+                        currentStock: Number(prod.currentStock) - Number(invoice.quantity)
+                    });
+
+                    // قيد الاستحقاق
+                    await window.fs.setDoc(window.fs.doc(window.db, "journalEntries", entryId), {
+                        date: invoice.date,
+                        description: `مبيعات لـ ${cust.name}`,
+                        lines: [
+                            { accountId: '1103', debit: totalAmount, credit: 0, note: cust.name },
+                            { accountId: '4101', debit: 0, credit: totalAmount, note: 'إيراد مبيعات' }
+                        ]
+                    });
+
+                    setInvoice({ customerId: '', productId: '', quantity: 1, unitPrice: 0, date: new Date().toISOString().split('T')[0] });
+                    alert("تم إصدار الفاتورة بنجاح");
+                } catch (e) { alert("خطأ في المعالجة"); }
+                setLoading(false);
             };
 
-            const handleSaveInvoice = async () => {
-                if (!newInvoice.customerId || newInvoice.amount <= 0) return;
-                
+            const handleDelete = async (sale) => {
+                if (!confirm("سيتم حذف الفاتورة وإعادة البضاعة للمخزون وحذف القيد. هل أنت متأكد؟")) return;
                 try {
-                    // 1. حفظ الفاتورة في المبيعات
-                    const invoiceDoc = await window.fs.addDoc(window.fs.collection(window.db, "sales_invoices"), newInvoice);
-                    
-                    // 2. توليد القيد المحاسبي تلقائياً (من ح/ العملاء إلى ح/ المبيعات)
-                    const autoEntry = {
-                        date: newInvoice.date,
-                        description: `فاتورة مبيعات رقم ${invoiceDoc.id.substring(0,5)} - عميل: ${customers.find(c => c.id === newInvoice.customerId)?.name}`,
-                        lines: [
-                            { accountId: '1103', debit: newInvoice.amount, credit: 0, note: 'مديونية عميل' }, // حساب العملاء (أصل)
-                            { accountId: '4101', debit: 0, credit: newInvoice.amount, note: 'إيراد مبيعات' }  // حساب المبيعات (إيراد)
-                        ]
-                    };
-                    await window.fs.setDoc(window.fs.doc(window.db, "journalEntries", Date.now().toString()), autoEntry);
-                    
-                    alert("تم حفظ الفاتورة وتوليد القيد المحاسبي بنجاح!");
-                    setNewInvoice({ customerId: '', amount: 0, date: new Date().toISOString().split('T')[0], note: '' });
-                } catch (e) { alert("خطأ في الحفظ"); }
+                    const prod = products.find(p => p.id === sale.productId);
+                    if (prod) {
+                        await window.fs.updateDoc(window.fs.doc(window.db, "products", sale.productId), {
+                            currentStock: Number(prod.currentStock) + Number(sale.quantity)
+                        });
+                    }
+                    if (sale.entryId) await window.fs.deleteDoc(window.fs.doc(window.db, "journalEntries", sale.entryId));
+                    await window.fs.deleteDoc(window.fs.doc(window.db, "sales_invoices", sale.id));
+                } catch (e) { alert("خطأ في الحذف"); }
             };
 
             return (
-                <div className="p-6 max-w-6xl mx-auto space-y-8">
-                    <header className="flex justify-between items-center">
-                        <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                            <LucideIcon name="shopping-cart" className="text-blue-600" size={28} /> إدارة المبيعات والعملاء
-                        </h1>
-                        <div className="flex gap-3">
-                            <button onClick={() => setShowCustomerModal(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 shadow-sm font-bold">
-                                <LucideIcon name="user-plus" /> إضافة عميل
-                            </button>
-                            <button onClick={() => window.location.href = 'index.html'} className="bg-slate-200 p-2.5 rounded-xl"><LucideIcon name="home" /></button>
-                        </div>
-                    </header>
+                <div className="min-h-screen relative overflow-x-hidden">
+                    <div className="p-6 max-w-6xl mx-auto space-y-6">
+                        <header className="flex justify-between items-center">
+                            <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+                                <LucideIcon name="badge-dollar-sign" className="text-green-600" size={28} /> مبيعات العملاء
+                            </h1>
+                            <button onClick={() => window.location.href='index.html'} className="bg-white p-2 rounded-xl border shadow-sm"><LucideIcon name="home" /></button>
+                        </header>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                        {/* نموذج الفاتورة */}
-                        <div className="md:col-span-1 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-                            <h2 className="font-bold border-b pb-2">إنشاء فاتورة بيع</h2>
-                            <div>
-                                <label className="text-xs text-slate-400">العميل</label>
-                                <select className="w-full border p-2 rounded-lg" value={newInvoice.customerId} onChange={e => setNewInvoice({...newInvoice, customerId: e.target.value})}>
-                                    <option value="">-- اختر عميل --</option>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            {/* نموذج البيع */}
+                            <div className="bg-white p-6 rounded-3xl border shadow-sm h-fit space-y-4">
+                                <h2 className="font-bold border-b pb-2 flex items-center gap-2 text-green-700"><LucideIcon name="plus" size={18}/> فاتورة بيع جديدة</h2>
+                                <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-green-500" value={invoice.customerId} onChange={e => setInvoice({...invoice, customerId: e.target.value})}>
+                                    <option value="">اختر العميل</option>
                                     {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                 </select>
+                                <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-green-500" value={invoice.productId} onChange={e => setInvoice({...invoice, productId: e.target.value})}>
+                                    <option value="">اختر الصنف</option>
+                                    {products.map(p => <option key={p.id} value={p.id} disabled={p.currentStock <= 0}>{p.name} (المتوفر: {p.currentStock})</option>)}
+                                </select>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <input type="number" placeholder="الكمية" className="border p-3 rounded-xl outline-none" value={invoice.quantity} onChange={e => setInvoice({...invoice, quantity: Number(e.target.value)})} />
+                                    <input type="number" placeholder="سعر البيع" className="border p-3 rounded-xl outline-none" value={invoice.unitPrice} onChange={e => setInvoice({...invoice, unitPrice: Number(e.target.value)})} />
+                                </div>
+                                <div className="bg-green-50 p-4 rounded-2xl flex justify-between font-black text-green-700 border border-green-100">
+                                    <span>إجمالي الفاتورة:</span>
+                                    <span className="font-mono">{totalAmount.toLocaleString()}</span>
+                                </div>
+                                <button onClick={handleSaveSale} disabled={loading} className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold hover:bg-green-700 shadow-lg shadow-green-100 transition-all">إصدار الفاتورة</button>
                             </div>
-                            <div>
-                                <label className="text-xs text-slate-400">المبلغ</label>
-                                <input type="number" className="w-full border p-2 rounded-lg" value={newInvoice.amount} onChange={e => setNewInvoice({...newInvoice, amount: Number(e.target.value)})} />
-                            </div>
-                            <div>
-                                <label className="text-xs text-slate-400">التاريخ</label>
-                                <input type="date" className="w-full border p-2 rounded-lg" value={newInvoice.date} onChange={e => setNewInvoice({...newInvoice, date: e.target.value})} />
-                            </div>
-                            <button onClick={handleSaveInvoice} className="w-full bg-primary text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-100">حفظ الفاتورة</button>
-                        </div>
 
-                        {/* قائمة الفواتير الأخيرة */}
-                        <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                            <table className="w-full text-right text-sm">
-                                <thead className="bg-slate-50 text-slate-500 font-bold">
-                                    <tr><th className="p-4">التاريخ</th><th className="p-4">العميل</th><th className="p-4">المبلغ</th><th className="p-4">الحالة</th></tr>
-                                </thead>
-                                <tbody className="divide-y">
-                                    {invoices.map(inv => (
-                                        <tr key={inv.id} className="hover:bg-slate-50">
-                                            <td className="p-4">{inv.date}</td>
-                                            <td className="p-4 font-bold">{customers.find(c => c.id === inv.customerId)?.name}</td>
-                                            <td className="p-4 font-mono text-blue-600 font-bold">{Number(inv.amount).toLocaleString()}</td>
-                                            <td className="p-4"><span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-[10px]">قيدت آلياً</span></td>
+                            {/* سجل المبيعات */}
+                            <div className="lg:col-span-2 bg-white rounded-3xl border shadow-sm overflow-hidden">
+                                <table className="w-full text-right text-sm">
+                                    <thead className="bg-slate-50 border-b text-slate-500">
+                                        <tr>
+                                            <th className="p-4">العميل / الصنف</th>
+                                            <th className="p-4 text-center">الكمية</th>
+                                            <th className="p-4 text-left">المبلغ</th>
+                                            <th className="p-4 text-left">إجراءات</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {sales.map(s => (
+                                            <tr key={s.id} className="hover:bg-slate-50 transition-all group">
+                                                <td className="p-4">
+                                                    <div className="font-bold text-slate-700">{s.customerName}</div>
+                                                    <div className="text-[10px] text-slate-400">{s.productName}</div>
+                                                </td>
+                                                <td className="p-4 text-center font-mono font-bold text-slate-600">{s.quantity}</td>
+                                                <td className="p-4 text-left font-black text-green-600 font-mono">{Number(s.totalAmount).toLocaleString()}</td>
+                                                <td className="p-4 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button onClick={() => {setSelectedSale(s); setDrawerOpen(true);}} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="سند قبض"><LucideIcon name="wallet" size={16}/></button>
+                                                    <button onClick={() => handleDelete(s)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="حذف"><LucideIcon name="trash-2" size={16}/></button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
 
-                    {/* Modal إضافة عميل */}
-                    {showCustomerModal && (
-                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                            <div className="bg-white p-8 rounded-3xl w-full max-w-md shadow-2xl animate-fade-in">
-                                <h2 className="text-xl font-bold mb-6">بيانات عميل جديد</h2>
-                                <div className="space-y-4">
-                                    <input placeholder="اسم العميل" className="w-full border p-3 rounded-xl" value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} />
-                                    <input placeholder="رقم الجوال" className="w-full border p-3 rounded-xl" value={newCustomer.phone} onChange={e => setNewCustomer({...newCustomer, phone: e.target.value})} />
-                                    <div className="flex gap-3 mt-6">
-                                        <button onClick={handleAddCustomer} className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold">حفظ</button>
-                                        <button onClick={() => setShowCustomerModal(false)} className="flex-1 bg-slate-100 py-3 rounded-xl">إلغاء</button>
+                    {/* اللوح الجانبي لسندات القبض */}
+                    {drawerOpen && <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40" onClick={() => setDrawerOpen(false)}></div>}
+                    <div className={`fixed top-0 left-0 h-full w-85 bg-white shadow-2xl z-50 p-8 drawer-slide transform ${drawerOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                        <div className="flex justify-between items-center mb-8 border-b pb-4">
+                            <h2 className="font-black text-xl text-slate-800">إصدار سند قبض</h2>
+                            <button onClick={() => setDrawerOpen(false)} className="text-slate-400 hover:text-slate-800 transition-colors"><LucideIcon name="x" size={24} /></button>
+                        </div>
+                        {selectedSale && (
+                            <div className="space-y-6">
+                                <div className="p-4 bg-green-50 rounded-2xl border border-green-100">
+                                    <p className="text-[10px] text-green-600 font-bold uppercase mb-2">تفاصيل الفاتورة</p>
+                                    <div className="text-sm space-y-1">
+                                        <div className="flex justify-between"><span>العميل:</span><span className="font-bold">{selectedSale.customerName}</span></div>
+                                        <div className="flex justify-between font-black text-lg mt-2"><span>المطلوب:</span><span>{Number(selectedSale.totalAmount).toLocaleString()}</span></div>
                                     </div>
                                 </div>
+                                
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 block mb-1 uppercase">طريقة القبض</label>
+                                        <select className="w-full border p-4 rounded-2xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500">
+                                            <option>نقداً - الصندوق (1101)</option>
+                                            <option>شيك - البنك (1102)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 block mb-1 uppercase">المبلغ المحصل</label>
+                                        <input type="number" className="w-full border p-4 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 text-lg font-mono font-bold" placeholder="0.00" />
+                                    </div>
+                                    <button onClick={() => {alert("تم تسجيل سند القبض يدوياً كعملية نقدية مستقلة بنجاح"); setDrawerOpen(false);}} className="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all mt-4">حفظ السند</button>
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
                 </div>
             );
         };
