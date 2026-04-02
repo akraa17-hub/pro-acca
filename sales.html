@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>إدارة المبيعات المتطورة - النظام المحاسبي</title>
+    <title>نظام المبيعات والعملاء المطور</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -12,7 +12,7 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
         body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
-        .drawer-slide { transition: transform 0.3s ease-in-out; }
+        .drawer-slide { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
     </style>
 </head>
 <body>
@@ -38,15 +38,13 @@
             const [sales, setSales] = useState([]);
             const [loading, setLoading] = useState(false);
             
-            const [drawerOpen, setDrawerOpen] = useState(false);
+            // إدارة الألواح الجانبية
+            const [activeDrawer, setActiveDrawer] = useState(null); // 'customer' or 'payment'
             const [selectedSale, setSelectedSale] = useState(null);
-            const [invoice, setInvoice] = useState({ 
-                customerId: '', 
-                productId: '', 
-                quantity: 1, 
-                unitPrice: 0, 
-                date: new Date().toISOString().split('T')[0] 
-            });
+            
+            // نماذج البيانات
+            const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', address: '' });
+            const [invoice, setInvoice] = useState({ customerId: '', productId: '', quantity: 1, unitPrice: 0, date: new Date().toISOString().split('T')[0] });
 
             useEffect(() => {
                 window.applySystemSettings();
@@ -57,158 +55,132 @@
 
             const totalAmount = useMemo(() => invoice.quantity * invoice.unitPrice, [invoice.quantity, invoice.unitPrice]);
 
+            // إضافة عميل جديد
+            const handleAddCustomer = async () => {
+                if (!newCustomer.name) return alert("اسم العميل مطلوب");
+                try {
+                    await window.fs.addDoc(window.fs.collection(window.db, "customers"), newCustomer);
+                    setNewCustomer({ name: '', phone: '', address: '' });
+                    setActiveDrawer(null);
+                    alert("تم إضافة العميل بنجاح");
+                } catch (e) { alert("خطأ في إضافة العميل"); }
+            };
+
             const handleSaveSale = async () => {
                 const prod = products.find(p => p.id === invoice.productId);
-                if (!prod || prod.currentStock < invoice.quantity) {
-                    alert(`خطأ: الكمية المتوفرة (${prod?.currentStock || 0}) لا تكفي للبيع.`);
-                    return;
-                }
-
+                if (!prod || prod.currentStock < invoice.quantity) return alert("الكمية لا تكفي!");
                 setLoading(true);
                 try {
                     const cust = customers.find(c => c.id === invoice.customerId);
                     const entryId = Date.now().toString();
-
-                    await window.fs.addDoc(window.fs.collection(window.db, "sales_invoices"), {
-                        ...invoice,
-                        totalAmount,
-                        productName: prod.name,
-                        customerName: cust.name,
-                        entryId
-                    });
-
-                    // تحديث المخزون (خصم)
-                    await window.fs.updateDoc(window.fs.doc(window.db, "products", invoice.productId), {
-                        currentStock: Number(prod.currentStock) - Number(invoice.quantity)
-                    });
-
-                    // قيد الاستحقاق
+                    await window.fs.addDoc(window.fs.collection(window.db, "sales_invoices"), { ...invoice, totalAmount, productName: prod.name, customerName: cust.name, entryId });
+                    await window.fs.updateDoc(window.fs.doc(window.db, "products", invoice.productId), { currentStock: Number(prod.currentStock) - Number(invoice.quantity) });
                     await window.fs.setDoc(window.fs.doc(window.db, "journalEntries", entryId), {
-                        date: invoice.date,
-                        description: `مبيعات لـ ${cust.name}`,
-                        lines: [
-                            { accountId: '1103', debit: totalAmount, credit: 0, note: cust.name },
-                            { accountId: '4101', debit: 0, credit: totalAmount, note: 'إيراد مبيعات' }
-                        ]
+                        date: invoice.date, description: `مبيعات لـ ${cust.name}`,
+                        lines: [{ accountId: '1103', debit: totalAmount, credit: 0, note: cust.name }, { accountId: '4101', debit: 0, credit: totalAmount, note: 'إيراد' }]
                     });
-
                     setInvoice({ customerId: '', productId: '', quantity: 1, unitPrice: 0, date: new Date().toISOString().split('T')[0] });
-                    alert("تم إصدار الفاتورة بنجاح");
-                } catch (e) { alert("خطأ في المعالجة"); }
+                } catch (e) { alert("خطأ في الحفظ"); }
                 setLoading(false);
             };
 
-            const handleDelete = async (sale) => {
-                if (!confirm("سيتم حذف الفاتورة وإعادة البضاعة للمخزون وحذف القيد. هل أنت متأكد؟")) return;
-                try {
-                    const prod = products.find(p => p.id === sale.productId);
-                    if (prod) {
-                        await window.fs.updateDoc(window.fs.doc(window.db, "products", sale.productId), {
-                            currentStock: Number(prod.currentStock) + Number(sale.quantity)
-                        });
-                    }
-                    if (sale.entryId) await window.fs.deleteDoc(window.fs.doc(window.db, "journalEntries", sale.entryId));
-                    await window.fs.deleteDoc(window.fs.doc(window.db, "sales_invoices", sale.id));
-                } catch (e) { alert("خطأ في الحذف"); }
+            const handleDelete = async (s) => {
+                if (!confirm("حذف الفاتورة؟")) return;
+                const prod = products.find(p => p.id === s.productId);
+                if (prod) await window.fs.updateDoc(window.fs.doc(window.db, "products", s.productId), { currentStock: Number(prod.currentStock) + Number(s.quantity) });
+                if (s.entryId) await window.fs.deleteDoc(window.fs.doc(window.db, "journalEntries", s.entryId));
+                await window.fs.deleteDoc(window.fs.doc(window.db, "sales_invoices", s.id));
             };
 
             return (
-                <div className="min-h-screen relative overflow-x-hidden">
-                    <div className="p-6 max-w-6xl mx-auto space-y-6">
-                        <header className="flex justify-between items-center">
-                            <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
-                                <LucideIcon name="badge-dollar-sign" className="text-green-600" size={28} /> مبيعات العملاء
-                            </h1>
+                <div className="min-h-screen relative overflow-x-hidden p-6 max-w-6xl mx-auto">
+                    <header className="flex justify-between items-center mb-8">
+                        <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+                            <LucideIcon name="users" className="text-blue-600" size={28} /> مبيعات وعملاء
+                        </h1>
+                        <div className="flex gap-2">
+                            <button onClick={() => setActiveDrawer('customer')} className="bg-blue-600 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-bold hover:bg-blue-700 shadow-lg shadow-blue-100">
+                                <LucideIcon name="user-plus" size={18} /> عميل جديد
+                            </button>
                             <button onClick={() => window.location.href='index.html'} className="bg-white p-2 rounded-xl border shadow-sm"><LucideIcon name="home" /></button>
-                        </header>
+                        </div>
+                    </header>
 
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                            {/* نموذج البيع */}
-                            <div className="bg-white p-6 rounded-3xl border shadow-sm h-fit space-y-4">
-                                <h2 className="font-bold border-b pb-2 flex items-center gap-2 text-green-700"><LucideIcon name="plus" size={18}/> فاتورة بيع جديدة</h2>
-                                <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-green-500" value={invoice.customerId} onChange={e => setInvoice({...invoice, customerId: e.target.value})}>
-                                    <option value="">اختر العميل</option>
-                                    {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                </select>
-                                <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-green-500" value={invoice.productId} onChange={e => setInvoice({...invoice, productId: e.target.value})}>
-                                    <option value="">اختر الصنف</option>
-                                    {products.map(p => <option key={p.id} value={p.id} disabled={p.currentStock <= 0}>{p.name} (المتوفر: {p.currentStock})</option>)}
-                                </select>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <input type="number" placeholder="الكمية" className="border p-3 rounded-xl outline-none" value={invoice.quantity} onChange={e => setInvoice({...invoice, quantity: Number(e.target.value)})} />
-                                    <input type="number" placeholder="سعر البيع" className="border p-3 rounded-xl outline-none" value={invoice.unitPrice} onChange={e => setInvoice({...invoice, unitPrice: Number(e.target.value)})} />
-                                </div>
-                                <div className="bg-green-50 p-4 rounded-2xl flex justify-between font-black text-green-700 border border-green-100">
-                                    <span>إجمالي الفاتورة:</span>
-                                    <span className="font-mono">{totalAmount.toLocaleString()}</span>
-                                </div>
-                                <button onClick={handleSaveSale} disabled={loading} className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold hover:bg-green-700 shadow-lg shadow-green-100 transition-all">إصدار الفاتورة</button>
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* نموذج الفاتورة */}
+                        <div className="bg-white p-6 rounded-3xl border shadow-sm h-fit space-y-4">
+                            <h2 className="font-bold border-b pb-2 flex items-center gap-2 text-blue-700"><LucideIcon name="file-plus" size={18}/> فاتورة جديدة</h2>
+                            <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={invoice.customerId} onChange={e => setInvoice({...invoice, customerId: e.target.value})}>
+                                <option value="">اختر العميل</option>
+                                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
+                            <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={invoice.productId} onChange={e => setInvoice({...invoice, productId: e.target.value})}>
+                                <option value="">اختر الصنف</option>
+                                {products.map(p => <option key={p.id} value={p.id} disabled={p.currentStock <= 0}>{p.name} (المتوفر: {p.currentStock})</option>)}
+                            </select>
+                            <div className="grid grid-cols-2 gap-2">
+                                <input type="number" placeholder="الكمية" className="border p-3 rounded-xl outline-none" value={invoice.quantity} onChange={e => setInvoice({...invoice, quantity: Number(e.target.value)})} />
+                                <input type="number" placeholder="السعر" className="border p-3 rounded-xl outline-none" value={invoice.unitPrice} onChange={e => setInvoice({...invoice, unitPrice: Number(e.target.value)})} />
                             </div>
+                            <div className="bg-blue-50 p-4 rounded-2xl flex justify-between font-black text-blue-700 border border-blue-100">
+                                <span>الإجمالي:</span>
+                                <span>{totalAmount.toLocaleString()}</span>
+                            </div>
+                            <button onClick={handleSaveSale} disabled={loading} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold hover:bg-blue-700 shadow-lg shadow-blue-100 transition-all">إصدار الفاتورة</button>
+                        </div>
 
-                            {/* سجل المبيعات */}
-                            <div className="lg:col-span-2 bg-white rounded-3xl border shadow-sm overflow-hidden">
-                                <table className="w-full text-right text-sm">
-                                    <thead className="bg-slate-50 border-b text-slate-500">
-                                        <tr>
-                                            <th className="p-4">العميل / الصنف</th>
-                                            <th className="p-4 text-center">الكمية</th>
-                                            <th className="p-4 text-left">المبلغ</th>
-                                            <th className="p-4 text-left">إجراءات</th>
+                        {/* سجل المبيعات */}
+                        <div className="lg:col-span-2 bg-white rounded-3xl border shadow-sm overflow-hidden">
+                            <table className="w-full text-right text-sm">
+                                <thead className="bg-slate-50 border-b">
+                                    <tr><th className="p-4">العميل / الصنف</th><th className="p-4 text-center">الكمية</th><th className="p-4 text-left">المبلغ</th><th className="p-4 text-left">إجراءات</th></tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {sales.map(s => (
+                                        <tr key={s.id} className="hover:bg-slate-50 transition-all group">
+                                            <td className="p-4"><div className="font-bold text-slate-700">{s.customerName}</div><div className="text-[10px] text-slate-400">{s.productName}</div></td>
+                                            <td className="p-4 text-center font-mono">{s.quantity}</td>
+                                            <td className="p-4 text-left font-black text-blue-600 font-mono">{Number(s.totalAmount).toLocaleString()}</td>
+                                            <td className="p-4 flex justify-end gap-1">
+                                                <button onClick={() => {setSelectedSale(s); setActiveDrawer('payment');}} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><LucideIcon name="wallet" size={16}/></button>
+                                                <button onClick={() => handleDelete(s)} className="p-2 text-red-400 hover:bg-red-50 rounded-lg"><LucideIcon name="trash-2" size={16}/></button>
+                                            </td>
                                         </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                        {sales.map(s => (
-                                            <tr key={s.id} className="hover:bg-slate-50 transition-all group">
-                                                <td className="p-4">
-                                                    <div className="font-bold text-slate-700">{s.customerName}</div>
-                                                    <div className="text-[10px] text-slate-400">{s.productName}</div>
-                                                </td>
-                                                <td className="p-4 text-center font-mono font-bold text-slate-600">{s.quantity}</td>
-                                                <td className="p-4 text-left font-black text-green-600 font-mono">{Number(s.totalAmount).toLocaleString()}</td>
-                                                <td className="p-4 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <button onClick={() => {setSelectedSale(s); setDrawerOpen(true);}} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="سند قبض"><LucideIcon name="wallet" size={16}/></button>
-                                                    <button onClick={() => handleDelete(s)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="حذف"><LucideIcon name="trash-2" size={16}/></button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 
-                    {/* اللوح الجانبي لسندات القبض */}
-                    {drawerOpen && <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40" onClick={() => setDrawerOpen(false)}></div>}
-                    <div className={`fixed top-0 left-0 h-full w-85 bg-white shadow-2xl z-50 p-8 drawer-slide transform ${drawerOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                    {/* الألواح الجانبية المشتركة */}
+                    {activeDrawer && <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40" onClick={() => setActiveDrawer(null)}></div>}
+                    <div className={`fixed top-0 left-0 h-full w-85 bg-white shadow-2xl z-50 p-8 drawer-slide transform ${activeDrawer ? 'translate-x-0' : '-translate-x-full'}`}>
                         <div className="flex justify-between items-center mb-8 border-b pb-4">
-                            <h2 className="font-black text-xl text-slate-800">إصدار سند قبض</h2>
-                            <button onClick={() => setDrawerOpen(false)} className="text-slate-400 hover:text-slate-800 transition-colors"><LucideIcon name="x" size={24} /></button>
+                            <h2 className="font-black text-xl text-slate-800">{activeDrawer === 'customer' ? 'تعريف عميل جديد' : 'إصدار سند قبض'}</h2>
+                            <button onClick={() => setActiveDrawer(null)} className="text-slate-400"><LucideIcon name="x" size={24} /></button>
                         </div>
-                        {selectedSale && (
-                            <div className="space-y-6">
-                                <div className="p-4 bg-green-50 rounded-2xl border border-green-100">
-                                    <p className="text-[10px] text-green-600 font-bold uppercase mb-2">تفاصيل الفاتورة</p>
-                                    <div className="text-sm space-y-1">
-                                        <div className="flex justify-between"><span>العميل:</span><span className="font-bold">{selectedSale.customerName}</span></div>
-                                        <div className="flex justify-between font-black text-lg mt-2"><span>المطلوب:</span><span>{Number(selectedSale.totalAmount).toLocaleString()}</span></div>
-                                    </div>
-                                </div>
-                                
-                                <div className="space-y-4">
-                                    <div>
-                                        <label className="text-[10px] font-bold text-slate-400 block mb-1 uppercase">طريقة القبض</label>
-                                        <select className="w-full border p-4 rounded-2xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500">
-                                            <option>نقداً - الصندوق (1101)</option>
-                                            <option>شيك - البنك (1102)</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] font-bold text-slate-400 block mb-1 uppercase">المبلغ المحصل</label>
-                                        <input type="number" className="w-full border p-4 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 text-lg font-mono font-bold" placeholder="0.00" />
-                                    </div>
-                                    <button onClick={() => {alert("تم تسجيل سند القبض يدوياً كعملية نقدية مستقلة بنجاح"); setDrawerOpen(false);}} className="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all mt-4">حفظ السند</button>
-                                </div>
+
+                        {activeDrawer === 'customer' ? (
+                            <div className="space-y-4">
+                                <div><label className="text-[10px] font-bold text-slate-400 block mb-1 uppercase">اسم العميل بالكامل</label>
+                                <input type="text" className="w-full border p-4 rounded-2xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} /></div>
+                                <div><label className="text-[10px] font-bold text-slate-400 block mb-1 uppercase">رقم الجوال</label>
+                                <input type="text" className="w-full border p-4 rounded-2xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={newCustomer.phone} onChange={e => setNewCustomer({...newCustomer, phone: e.target.value})} /></div>
+                                <div><label className="text-[10px] font-bold text-slate-400 block mb-1 uppercase">العنوان / ملاحظات</label>
+                                <input type="text" className="w-full border p-4 rounded-2xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={newCustomer.address} onChange={e => setNewCustomer({...newCustomer, address: e.target.value})} /></div>
+                                <button onClick={handleAddCustomer} className="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl shadow-blue-100 mt-4">حفظ بيانات العميل</button>
                             </div>
+                        ) : (
+                            selectedSale && (
+                                <div className="space-y-6">
+                                    <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
+                                        <p className="text-[10px] text-blue-600 font-bold uppercase mb-2">فاتورة العميل: {selectedSale.customerName}</p>
+                                        <div className="flex justify-between font-black text-lg"><span>المبلغ:</span><span>{Number(selectedSale.totalAmount).toLocaleString()}</span></div>
+                                    </div>
+                                    <input type="number" className="w-full border p-4 rounded-2xl outline-none focus:ring-2 focus:ring-green-500 text-lg font-mono" placeholder="المبلغ المحصل..." />
+                                    <button onClick={() => {alert("تم الحفظ"); setActiveDrawer(null);}} className="w-full bg-green-600 text-white py-5 rounded-2xl font-black text-lg shadow-xl mt-4">حفظ سند القبض</button>
+                                </div>
+                            )
                         )}
                     </div>
                 </div>
