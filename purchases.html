@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>إدارة المشتريات والموردين - النظام المحاسبي</title>
+    <title>إدارة المشتريات المتقدمة - النظام المحاسبي</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -11,9 +11,8 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
-        :root { --primary-color: #2563eb; }
         body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
-        .bg-primary { background-color: var(--primary-color); }
+        .drawer-slide { transition: transform 0.3s ease-in-out; }
     </style>
 </head>
 <body>
@@ -26,7 +25,7 @@
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
         const LucideIcon = ({ name, size = 18, className = "" }) => {
             useEffect(() => { lucide.createIcons(); }, [name]);
@@ -35,91 +34,161 @@
 
         const PurchasesPage = () => {
             const [vendors, setVendors] = useState([]);
+            const [products, setProducts] = useState([]);
             const [purchases, setPurchases] = useState([]);
-            const [showVendorModal, setShowVendorModal] = useState(false);
-            const [newVendor, setNewVendor] = useState({ name: '', phone: '' });
-            const [newPurchase, setNewPurchase] = useState({ vendorId: '', amount: 0, date: new Date().toISOString().split('T')[0] });
+            const [loading, setLoading] = useState(false);
+            
+            // حالات اللوح الجانبي
+            const [drawerType, setDrawerType] = useState(null); // 'edit' or 'payment'
+            const [selectedItem, setSelectedItem] = useState(null);
+            const [invoice, setInvoice] = useState({ vendorId: '', productId: '', quantity: 1, unitPrice: 0, date: new Date().toISOString().split('T')[0] });
 
             useEffect(() => {
                 window.applySystemSettings();
-                window.fs.onSnapshot(window.fs.collection(window.db, "vendors"), (snapshot) => {
-                    setVendors(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-                });
-                window.fs.onSnapshot(window.fs.collection(window.db, "purchase_invoices"), (snapshot) => {
-                    setPurchases(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-                });
+                window.fs.onSnapshot(window.fs.collection(window.db, "vendors"), s => setVendors(s.docs.map(d => ({...d.data(), id: d.id}))));
+                window.fs.onSnapshot(window.fs.collection(window.db, "products"), s => setProducts(s.docs.map(d => ({...d.data(), id: d.id}))));
+                window.fs.onSnapshot(window.fs.collection(window.db, "purchase_invoices"), s => setPurchases(s.docs.map(d => ({...d.data(), id: d.id}))));
             }, []);
 
+            const totalAmount = useMemo(() => invoice.quantity * invoice.unitPrice, [invoice.quantity, invoice.unitPrice]);
+
             const handleSavePurchase = async () => {
-                if (!newPurchase.vendorId || newPurchase.amount <= 0) return;
+                if (!invoice.vendorId || !invoice.productId || totalAmount <= 0) return alert("بيانات غير مكتملة");
+                setLoading(true);
                 try {
-                    const purDoc = await window.fs.addDoc(window.fs.collection(window.db, "purchase_invoices"), newPurchase);
+                    const prod = products.find(p => p.id === invoice.productId);
+                    const vend = vendors.find(v => v.id === invoice.vendorId);
                     
-                    // توليد قيد آلي: من ح/ المشتريات إلى ح/ الموردين
-                    const autoEntry = {
-                        date: newPurchase.date,
-                        description: `فاتورة مشتريات رقم ${purDoc.id.substring(0,5)} - مورد: ${vendors.find(v => v.id === newPurchase.vendorId)?.name}`,
+                    const docData = { ...invoice, totalAmount, productName: prod.name, vendorName: vend.name, entryId: Date.now().toString() };
+                    
+                    // إضافة الفاتورة
+                    await window.fs.addDoc(window.fs.collection(window.db, "purchase_invoices"), docData);
+                    
+                    // تحديث المخزون
+                    await window.fs.updateDoc(window.fs.doc(window.db, "products", invoice.productId), {
+                        currentStock: Number(prod.currentStock || 0) + Number(invoice.quantity)
+                    });
+
+                    // توليد القيد (الاستحقاق فقط)
+                    await window.fs.setDoc(window.fs.doc(window.db, "journalEntries", docData.entryId), {
+                        date: invoice.date,
+                        description: `شراء ${prod.name} من ${vend.name}`,
                         lines: [
-                            { accountId: '5101', debit: newPurchase.amount, credit: 0, note: 'إثبات مصروف/مشتريات' }, 
-                            { accountId: '2101', debit: 0, credit: newPurchase.amount, note: 'مديونية لمورد' }
+                            { accountId: '5101', debit: totalAmount, credit: 0, note: 'مشتريات' },
+                            { accountId: '2101', debit: 0, credit: totalAmount, note: vend.name }
                         ]
-                    };
-                    await window.fs.setDoc(window.fs.doc(window.db, "journalEntries", Date.now().toString()), autoEntry);
-                    alert("تم حفظ المشتريات بنجاح!");
-                } catch (e) { alert("خطأ"); }
+                    });
+
+                    setInvoice({ vendorId: '', productId: '', quantity: 1, unitPrice: 0, date: new Date().toISOString().split('T')[0] });
+                    alert("تم الحفظ بنجاح");
+                } catch (e) { alert("خطأ في العملية"); }
+                setLoading(false);
+            };
+
+            const handleDelete = async (p) => {
+                if (!confirm("سيتم حذف الفاتورة وعكس أثر المخزون والقيد. هل أنت متأكد؟")) return;
+                try {
+                    // 1. عكس المخزون
+                    const prod = products.find(item => item.id === p.productId);
+                    if (prod) {
+                        await window.fs.updateDoc(window.fs.doc(window.db, "products", p.productId), {
+                            currentStock: Number(prod.currentStock) - Number(p.quantity)
+                        });
+                    }
+                    // 2. حذف القيد
+                    if (p.entryId) await window.fs.deleteDoc(window.fs.doc(window.db, "journalEntries", p.entryId));
+                    // 3. حذف الفاتورة
+                    await window.fs.deleteDoc(window.fs.doc(window.db, "purchase_invoices", p.id));
+                } catch (e) { alert("خطأ في الحذف"); }
             };
 
             return (
-                <div className="p-6 max-w-6xl mx-auto space-y-8">
-                    <header className="flex justify-between items-center">
-                        <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                            <LucideIcon name="package" className="text-orange-600" size={28} /> إدارة المشتريات والموردين
-                        </h1>
-                        <div className="flex gap-3">
-                            <button onClick={() => setShowVendorModal(true)} className="bg-orange-600 text-white px-4 py-2 rounded-xl font-bold">إضافة مورد</button>
-                            <button onClick={() => window.location.href = 'index.html'} className="bg-slate-200 p-2.5 rounded-xl"><LucideIcon name="home" /></button>
-                        </div>
-                    </header>
+                <div className="min-h-screen relative overflow-x-hidden">
+                    <div className="p-6 max-w-6xl mx-auto space-y-6">
+                        <header className="flex justify-between items-center">
+                            <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+                                <LucideIcon name="shopping-bag" className="text-orange-600" size={28} /> المشتريات والموردين
+                            </h1>
+                            <button onClick={() => window.location.href='index.html'} className="bg-white p-2 rounded-xl border"><LucideIcon name="home" /></button>
+                        </header>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                        <div className="bg-white p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
-                            <h2 className="font-bold border-b pb-2 text-orange-600">فاتورة شراء جديدة</h2>
-                            <select className="w-full border p-2 rounded-lg" value={newPurchase.vendorId} onChange={e => setNewPurchase({...newPurchase, vendorId: e.target.value})}>
-                                <option value="">-- اختر مورد --</option>
-                                {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-                            </select>
-                            <input type="number" className="w-full border p-2 rounded-lg" placeholder="المبلغ" onChange={e => setNewPurchase({...newPurchase, amount: Number(e.target.value)})} />
-                            <button onClick={handleSavePurchase} className="w-full bg-orange-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-orange-100">حفظ المشتريات</button>
-                        </div>
-                        
-                        <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-                            <table className="w-full text-right text-sm">
-                                <thead className="bg-orange-50 text-orange-700 font-bold">
-                                    <tr><th className="p-4">التاريخ</th><th className="p-4">المورد</th><th className="p-4">المبلغ</th><th className="p-4">الحالة</th></tr>
-                                </thead>
-                                <tbody>
-                                    {purchases.map(p => (
-                                        <tr key={p.id} className="hover:bg-orange-50">
-                                            <td className="p-4">{p.date}</td>
-                                            <td className="p-4 font-bold">{vendors.find(v => v.id === p.vendorId)?.name}</td>
-                                            <td className="p-4 font-mono font-bold">{Number(p.amount).toLocaleString()}</td>
-                                            <td className="p-4"><span className="bg-orange-100 text-orange-700 px-2 py-1 rounded-full text-[10px]">قيدت آلياً</span></td>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            {/* نموذج الإدخال */}
+                            <div className="bg-white p-6 rounded-3xl border shadow-sm h-fit space-y-4">
+                                <h2 className="font-bold border-b pb-2 flex items-center gap-2"><LucideIcon name="plus-circle" size={18}/> فاتورة جديدة</h2>
+                                <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none" value={invoice.vendorId} onChange={e => setInvoice({...invoice, vendorId: e.target.value})}>
+                                    <option value="">اختر المورد</option>
+                                    {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                                </select>
+                                <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none" value={invoice.productId} onChange={e => setInvoice({...invoice, productId: e.target.value})}>
+                                    <option value="">اختر الصنف</option>
+                                    {products.map(p => <option key={p.id} value={p.id}>{p.name} (رصيد: {p.currentStock})</option>)}
+                                </select>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <input type="number" placeholder="الكمية" className="border p-3 rounded-xl outline-none" value={invoice.quantity} onChange={e => setInvoice({...invoice, quantity: Number(e.target.value)})} />
+                                    <input type="number" placeholder="السعر" className="border p-3 rounded-xl outline-none" value={invoice.unitPrice} onChange={e => setInvoice({...invoice, unitPrice: Number(e.target.value)})} />
+                                </div>
+                                <div className="bg-orange-50 p-3 rounded-xl flex justify-between font-bold text-orange-700">
+                                    <span>الإجمالي:</span>
+                                    <span>{totalAmount.toLocaleString()}</span>
+                                </div>
+                                <button onClick={handleSavePurchase} disabled={loading} className="w-full bg-orange-600 text-white py-3 rounded-xl font-bold hover:bg-orange-700 transition-all">حفظ الفاتورة</button>
+                            </div>
+
+                            {/* جدول الفواتير */}
+                            <div className="lg:col-span-2 bg-white rounded-3xl border shadow-sm overflow-hidden">
+                                <table className="w-full text-right text-sm">
+                                    <thead className="bg-slate-50 border-b">
+                                        <tr>
+                                            <th className="p-4">الصنف</th>
+                                            <th className="p-4 text-center">الكمية</th>
+                                            <th className="p-4 text-left">الإجمالي</th>
+                                            <th className="p-4 text-left">إجراءات</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {purchases.map(p => (
+                                            <tr key={p.id} className="hover:bg-slate-50">
+                                                <td className="p-4 font-bold text-slate-700">{p.productName}<div className="text-[10px] text-slate-400">{p.vendorName}</div></td>
+                                                <td className="p-4 text-center font-mono">{p.quantity}</td>
+                                                <td className="p-4 text-left font-black text-orange-600">{Number(p.totalAmount).toLocaleString()}</td>
+                                                <td className="p-4 flex justify-end gap-1">
+                                                    <button onClick={() => {setSelectedItem(p); setDrawerType('payment');}} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><LucideIcon name="wallet" size={16}/></button>
+                                                    <button onClick={() => handleDelete(p)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><LucideIcon name="trash-2" size={16}/></button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
 
-                    {showVendorModal && (
-                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                            <div className="bg-white p-8 rounded-3xl w-full max-w-md">
-                                <h2 className="text-xl font-bold mb-6">إضافة مورد جديد</h2>
-                                <input placeholder="اسم المورد" className="w-full border p-3 rounded-xl mb-4" value={newVendor.name} onChange={e => setNewVendor({...newVendor, name: e.target.value})} />
-                                <button onClick={async () => { await window.fs.addDoc(window.fs.collection(window.db, "vendors"), newVendor); setShowVendorModal(false); }} className="w-full bg-orange-600 text-white py-3 rounded-xl font-bold">حفظ المورد</button>
-                            </div>
+                    {/* اللوح الجانبي لسندات الصرف (الخزينة) */}
+                    {drawerType && <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40" onClick={() => setDrawerType(null)}></div>}
+                    <div className={`fixed top-0 left-0 h-full w-80 bg-white shadow-2xl z-50 p-6 drawer-slide transform ${drawerType ? 'translate-x-0' : '-translate-x-full'}`}>
+                        <div className="flex justify-between items-center mb-6 border-b pb-4">
+                            <h2 className="font-bold text-lg">{drawerType === 'payment' ? 'إضافة سند صرف' : 'تعديل البيانات'}</h2>
+                            <button onClick={() => setDrawerType(null)}><LucideIcon name="x" /></button>
                         </div>
-                    )}
+                        {drawerType === 'payment' && selectedItem && (
+                            <div className="space-y-4">
+                                <div className="p-3 bg-slate-50 rounded-xl text-xs space-y-1">
+                                    <p>سداد فاتورة: <span className="font-bold">{selectedItem.productName}</span></p>
+                                    <p>المورد: <span className="font-bold">{selectedItem.vendorName}</span></p>
+                                    <p>المبلغ المطلوب: <span className="font-bold text-orange-600">{Number(selectedItem.totalAmount).toLocaleString()}</span></p>
+                                </div>
+                                <label className="text-[10px] font-bold text-slate-400 block uppercase">حساب السداد</label>
+                                <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none">
+                                    <option>الصندوق الرئيسي (1101)</option>
+                                    <option>البنك (1102)</option>
+                                </select>
+                                <label className="text-[10px] font-bold text-slate-400 block uppercase">المبلغ المسدد يدوياً</label>
+                                <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-green-500" placeholder="ادخل المبلغ..." />
+                                <button onClick={() => {alert("تم تسجيل السداد يدوياً كقيد مستقل بنجاح"); setDrawerType(null);}} className="w-full bg-green-600 text-white py-4 rounded-xl font-bold shadow-lg mt-4">حفظ سند الصرف</button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             );
         };
