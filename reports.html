@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>التقارير المالية الختامية - النظام المحاسبي</title>
+    <title>التقارير المالية الاحترافية - أكرم فاضل</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -12,6 +12,7 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Readex+Pro:wght@300;400;600;700&display=swap');
         body { font-family: 'Readex Pro', sans-serif; background-color: #f8fafc; }
+        .tab-active { background-color: #2563eb; color: white; shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
     </style>
 </head>
 <body>
@@ -27,103 +28,106 @@
         const { useState, useEffect, useMemo } = React;
 
         const LucideIcon = ({ name, size = 18 }) => {
-            useEffect(() => { lucide.createIcons(); }, [name]);
-            return <i data-lucide={name} width={size} height={size}></i>;
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} style={{width: size, height: size}}></i>;
         };
 
-        const ReportsPage = () => {
-            const [entries, setEntries] = useState([]);
+        const ReportsApp = () => {
             const [accounts, setAccounts] = useState([]);
-            const [activeTab, setActiveTab] = useState('trial-balance');
+            const [entries, setEntries] = useState([]);
+            const [activeTab, setActiveTab] = useState('tb'); // tb: Trial Balance, is: Income Statement, bs: Balance Sheet
 
             useEffect(() => {
-                window.applySystemSettings();
-                // جلب البيانات بشكل متزامن لضمان الدقة
-                const unsubAccounts = window.fs.onSnapshot(window.fs.collection(window.db, "accounts"), s => setAccounts(s.docs.map(d => ({...d.data(), id: d.id}))));
-                const unsubEntries = window.fs.onSnapshot(window.fs.collection(window.db, "journalEntries"), s => setEntries(s.docs.map(d => d.data())));
-                return () => { unsubAccounts(); unsubEntries(); };
+                if (window.applySystemSettings) window.applySystemSettings();
+                
+                // جلب البيانات مع التأكد من وجود window.db
+                const fetch = () => {
+                    if (!window.db) return setTimeout(fetch, 500);
+                    window.fs.onSnapshot(window.fs.collection(window.db, "accounts"), s => 
+                        setAccounts(s.docs.map(d => ({id: d.id, ...d.data()}))));
+                    window.fs.onSnapshot(window.fs.collection(window.db, "journalEntries"), s => 
+                        setEntries(s.docs.map(d => d.data())));
+                };
+                fetch();
             }, []);
 
-            // ميزان المراجعة الذكي (يعكس كل العمليات)
-            const trialBalance = useMemo(() => {
-                const balances = {};
-                accounts.forEach(acc => balances[acc.id] = { name: acc.name, id: acc.id, debit: 0, credit: 0 });
+            // معالجة البيانات محاسبياً (Core Logic)
+            const processedData = useMemo(() => {
+                const map = {};
+                accounts.forEach(a => map[a.id] = { ...a, debit: 0, credit: 0 });
                 
-                entries.forEach(entry => {
-                    entry.lines?.forEach(line => {
-                        if (balances[line.accountId]) {
-                            balances[line.accountId].debit += Number(line.debit || 0);
-                            balances[line.accountId].credit += Number(line.credit || 0);
+                entries.forEach(e => {
+                    e.lines?.forEach(l => {
+                        if (map[l.accountId]) {
+                            map[l.accountId].debit += Number(l.debit || 0);
+                            map[l.accountId].credit += Number(l.credit || 0);
                         }
                     });
                 });
-                return Object.values(balances);
-            }, [entries, accounts]);
+
+                return Object.values(map).map(a => {
+                    // طبيعة الحساب: 1 أصول، 2 خصوم، 3 ملكية، 4 إيراد، 5 مصروف
+                    const isDebit = a.id.startsWith('1') || a.id.startsWith('5');
+                    return { ...a, balance: isDebit ? a.debit - a.credit : a.credit - a.debit };
+                });
+            }, [accounts, entries]);
+
+            const filteredData = processedData.filter(a => {
+                if (activeTab === 'is') return a.id.startsWith('4') || a.id.startsWith('5');
+                if (activeTab === 'bs') return a.id.startsWith('1') || a.id.startsWith('2') || a.id.startsWith('3');
+                return true;
+            });
 
             return (
-                <div className="p-6 max-w-6xl mx-auto space-y-6">
-                    <header className="flex justify-between items-center bg-white p-6 rounded-3xl border shadow-sm">
-                        <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
-                            <LucideIcon name="file-spreadsheet" size={28} /> التقارير المالية الختامية
-                        </h1>
-                        <button onClick={() => window.location.href='index.html'} className="p-2 border rounded-xl"><LucideIcon name="home" /></button>
-                    </header>
-
-                    {/* التبويبات الثلاثة المطلوبة */}
-                    <div className="flex bg-white rounded-2xl shadow-sm overflow-hidden p-1 border">
-                        {['trial-balance', 'income-statement', 'balance-sheet'].map((tab) => (
-                            <button key={tab} onClick={() => setActiveTab(tab)} 
-                                className={`flex-1 py-3 rounded-xl font-bold transition-all ${activeTab === tab ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}>
-                                {tab === 'trial-balance' ? 'ميزان المراجعة' : tab === 'income-statement' ? 'قائمة الدخل' : 'المركز المالي'}
+                <div className="p-4 md:p-8">
+                    <div className="max-w-6xl mx-auto space-y-6">
+                        <div className="flex justify-between items-center bg-white p-6 rounded-3xl shadow-sm border">
+                            <h1 className="text-2xl font-black text-slate-800 flex items-center gap-3">
+                                <LucideIcon name="file-text" size={28} /> التقارير الختامية الموحدة
+                            </h1>
+                            <button onClick={() => window.location.href='index.html'} className="p-2 hover:bg-slate-100 rounded-xl transition-all">
+                                <LucideIcon name="home" />
                             </button>
-                        ))}
-                    </div>
+                        </div>
 
-                    <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
-                        <table className="w-full text-right">
-                            <thead className="bg-slate-50 text-slate-500 text-xs border-b">
-                                <tr>
-                                    <th className="p-4">الحساب</th>
-                                    {activeTab === 'trial-balance' ? (
-                                        <>
-                                            <th className="p-4 text-center">مدين</th>
-                                            <th className="p-4 text-center">دائن</th>
-                                        </>
-                                    ) : (
-                                        <th className="p-4 text-left">القيمة</th>
-                                    )}
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {trialBalance.filter(acc => {
-                                    if (activeTab === 'income-statement') return acc.id.startsWith('4') || acc.id.startsWith('5');
-                                    if (activeTab === 'balance-sheet') return acc.id.startsWith('1') || acc.id.startsWith('2') || acc.id.startsWith('3');
-                                    return true;
-                                }).map(acc => {
-                                    const netBalance = (acc.id.startsWith('1') || acc.id.startsWith('5')) ? acc.debit - acc.credit : acc.credit - acc.debit;
-                                    return (
-                                        <tr key={acc.id} className="hover:bg-slate-50">
-                                            <td className="p-4 font-bold">{acc.name} <span className="text-[10px] text-slate-400 block">{acc.id}</span></td>
-                                            {activeTab === 'trial-balance' ? (
-                                                <>
-                                                    <td className="p-4 text-center font-mono">{acc.debit.toLocaleString()}</td>
-                                                    <td className="p-4 text-center font-mono">{acc.credit.toLocaleString()}</td>
-                                                </>
-                                            ) : (
-                                                <td className={`p-4 text-left font-black font-mono ${netBalance < 0 ? 'text-red-500' : 'text-blue-600'}`}>{netBalance.toLocaleString()}</td>
-                                            )}
+                        {/* أزرار التنقل الاحترافية */}
+                        <div className="grid grid-cols-3 gap-2 bg-white p-2 rounded-2xl border shadow-sm">
+                            <button onClick={() => setActiveTab('tb')} className={`py-3 rounded-xl font-bold transition-all ${activeTab === 'tb' ? 'tab-active' : 'text-slate-500 hover:bg-slate-50'}`}>ميزان المراجعة</button>
+                            <button onClick={() => setActiveTab('is')} className={`py-3 rounded-xl font-bold transition-all ${activeTab === 'is' ? 'tab-active' : 'text-slate-500 hover:bg-slate-50'}`}>قائمة الدخل</button>
+                            <button onClick={() => setActiveTab('bs')} className={`py-3 rounded-xl font-bold transition-all ${activeTab === 'bs' ? 'tab-active' : 'text-slate-500 hover:bg-slate-50'}`}>المركز المالي</button>
+                        </div>
+
+                        {/* الجدول الموحد */}
+                        <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                            <table className="w-full text-right">
+                                <thead className="bg-slate-50 border-b text-slate-400 text-xs">
+                                    <tr>
+                                        <th className="p-4">اسم الحساب (الكود)</th>
+                                        <th className="p-4 text-center">مدين / إجمالي</th>
+                                        <th className="p-4 text-center">دائن / إجمالي</th>
+                                        <th className="p-4 text-left">الرصيد الصافي</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {filteredData.map(acc => (
+                                        <tr key={acc.id} className="hover:bg-blue-50/50 transition-colors group">
+                                            <td className="p-4 font-bold text-slate-700">{acc.name} <span className="text-[10px] text-slate-300 mr-2 uppercase">{acc.id}</span></td>
+                                            <td className="p-4 text-center font-mono text-slate-500">{acc.debit.toLocaleString()}</td>
+                                            <td className="p-4 text-center font-mono text-slate-500">{acc.credit.toLocaleString()}</td>
+                                            <td className={`p-4 text-left font-black font-mono ${acc.balance < 0 ? 'text-red-500' : 'text-blue-600'}`}>{acc.balance.toLocaleString()}</td>
                                         </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {filteredData.length === 0 && <div className="p-20 text-center text-slate-400">لا توجد بيانات لعرضها حالياً</div>}
+                        </div>
                     </div>
                 </div>
             );
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<ReportsPage />);
+        root.render(<ReportsApp />);
     </script>
 </body>
 </html>
